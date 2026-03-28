@@ -1,76 +1,126 @@
 # gstack-no-telemetry
 
-Remove telemetry from [gstack](https://github.com/garrytan/gstack) after every install or upgrade.
+**gstack is the best skills framework for AI coding agents.** It makes Claude Code, Codex, and Gemini dramatically more capable. The QA testing, code review, shipping workflows, design audits... genuinely great software.
 
-gstack is a great skills framework for Claude Code. It also ships with telemetry that logs your usage to local JSONL files and sends data to a remote binary. This script strips all of that cleanly.
+It also phones home.
+
+Every skill invocation logs to local JSONL files. An opt-in prompt pushes for "community" or "anonymous" telemetry via a remote binary. Session IDs, skill names, durations, outcomes, timestamps... all tracked. Even if you say "no thanks," the local analytics directory still gets written to on every single skill run.
+
+**Privacy is not a feature request. It's a requirement.**
+
+This script removes all telemetry from gstack. Cleanly, completely, and automatically after every update.
+
+---
 
 ## What gets removed
 
-- **Telemetry shell variables** -- `_TEL`, `_TEL_START`, `_SESSION_ID` from the preamble bash output
-- **Opt-in prompt logic** -- `TEL_PROMPTED` echo lines and conditional blocks
-- **`generateTelemetryPrompt()` function** -- the entire function and its call site in preamble composition
-- **Telemetry epilogue** -- the "Telemetry (run last)" section in completion status
-- **Analytics directory writes** -- `mkdir -p ~/.gstack/analytics` and JSONL append lines
-- **Telemetry binaries** -- `gstack-telemetry-log`, `gstack-telemetry-sync`, `gstack-analytics` from `bin/`
-- **Test assertions** -- telemetry-related test cases that would fail after stripping
-- **Docstring references** -- cleans up comments that mention telemetry
+| Component | What it does | Gone |
+|-----------|-------------|------|
+| `_TEL`, `_TEL_START`, `_SESSION_ID` | Shell vars that track your session | Yes |
+| `generateTelemetryPrompt()` | The opt-in prompt (community/anonymous/off) | Yes |
+| `TEL_PROMPTED` flag | Tracks whether you've been asked about telemetry | Yes |
+| `~/.gstack/analytics/` writes | Local JSONL logging on every skill run | Yes |
+| `.pending-*` file handling | Deferred telemetry finalization | Yes |
+| "Telemetry (run last)" epilogue | End-of-skill duration + outcome logging | Yes |
+| `gstack-telemetry-log` | Remote telemetry binary | Deleted |
+| `gstack-telemetry-sync` | Remote telemetry sync binary | Deleted |
+| `gstack-analytics` | Analytics CLI binary | Deleted |
+| Telemetry test assertions | Tests that would fail after stripping | Removed |
 
-After patching, the script regenerates all `SKILL.md` files and verifies no telemetry references remain.
+After patching, the script regenerates all 30+ `SKILL.md` files and verifies zero telemetry references remain.
 
-## Installation
+**What stays:** Everything that makes gstack useful. Update checks, session tracking, skill discovery, repo mode detection, proactive suggestions, the browse daemon, all skill workflows. Nothing functional is touched.
+
+---
+
+## Install
+
+One command. Lives in `~/.gstack/` so it survives gstack updates.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/VXNCXNX/gstack-no-telemetry/main/strip-telemetry.sh \
   -o ~/.gstack/strip-telemetry.sh && chmod +x ~/.gstack/strip-telemetry.sh
 ```
 
-The script lives in `~/.gstack/` so it survives gstack updates.
+## Use
 
-## Usage
-
-### Run manually
+### Manual
 
 ```bash
 ~/.gstack/strip-telemetry.sh
 ```
 
-The script auto-detects the default gstack location (`~/.claude/skills/gstack`). To specify a custom path:
+Custom gstack location:
 
 ```bash
 ~/.gstack/strip-telemetry.sh /path/to/your/gstack
 ```
 
-### Run automatically after every gstack upgrade
+### Automatic (recommended)
 
-Add this line to your `CLAUDE.md` (project-level or global `~/.claude/CLAUDE.md`):
+Add this to your `~/.claude/CLAUDE.md`:
 
 ```markdown
-After running any gstack upgrade command, run `~/.gstack/strip-telemetry.sh`
+## gstack Post-Upgrade
+
+After any gstack upgrade completes (after `./setup` finishes), run `~/.gstack/strip-telemetry.sh` to remove telemetry. This is non-negotiable -- always run it.
 ```
 
-This way Claude will strip telemetry automatically whenever gstack updates itself.
+Claude will strip telemetry automatically after every `/gstack-upgrade`. You never think about it again.
+
+---
 
 ## How it works
 
-The script is **idempotent** -- safe to run multiple times. If telemetry is already removed, it exits immediately.
+The script is **idempotent**. Run it once, run it ten times. If telemetry is already gone, it exits in under a second.
 
-It works in five phases:
+Five phases:
 
-1. **Patch `preamble.ts`** -- Multi-pass `sed` removes shell variable declarations, echo lines, and mkdir/JSONL writes. A Python pass handles the `generateTelemetryPrompt()` function removal, preamble composition cleanup, docstring edits, and the telemetry epilogue in completion status.
+1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` to remove telemetry variables, the opt-in prompt function, the telemetry epilogue, and analytics writes. Fixes the proactive prompt dependency chain that was gated on telemetry state.
 
-2. **Delete binaries** -- Removes `gstack-telemetry-log`, `gstack-telemetry-sync`, and `gstack-analytics` from `bin/`.
+2. **Delete binaries** -- Removes the three telemetry executables from `bin/`.
 
-3. **Patch tests** -- Removes telemetry-specific test cases from `gen-skill-docs.test.ts` so the test suite stays green.
+3. **Patch tests** -- Strips telemetry-specific test cases so the suite stays green.
 
-4. **Regenerate SKILL.md** -- Runs `bun run gen:skill-docs` to rebuild all skill documentation from the patched source.
+4. **Regenerate** -- Runs `bun run gen:skill-docs` to rebuild all skill files from the patched source.
 
-5. **Verify** -- Greps all `SKILL.md` files and `preamble.ts` for telemetry references. Exits with an error if any remain.
+5. **Verify** -- Greps every generated `SKILL.md` and the source for telemetry references. Fails loudly if anything slipped through.
 
 ### Requirements
 
-- `bash`, `sed`, `python3` (macOS/Linux standard)
-- `bun` (used by gstack for `gen:skill-docs`)
+- `bash`, `sed`, `python3` (standard on macOS and Linux)
+- `bun` (already required by gstack)
+
+---
+
+## Why not just set telemetry to "off"?
+
+Because `gstack-config set telemetry off` only disables the **remote** binary. The local analytics directory still gets created. The JSONL file still gets appended to on every skill run. The session ID is still generated. The duration timer still runs. The pending-file mechanism still executes.
+
+"Off" means "we still collect it, we just don't send it." This script means "there is nothing to collect."
+
+---
+
+## FAQ
+
+**Does this break gstack?**
+No. Every functional feature works exactly the same. The script only removes code paths that exist solely for telemetry. Tests pass (214/215, the one pre-existing failure is unrelated to telemetry).
+
+**Will gstack updates re-add telemetry?**
+Yes, every time. That's why the CLAUDE.md instruction exists. Claude runs the script automatically after each upgrade.
+
+**Does this work with vendored/local installs?**
+Yes. Pass the install path as an argument: `~/.gstack/strip-telemetry.sh ./path/to/gstack`
+
+**I use Codex/Kiro, not Claude Code.**
+The script patches the source generator, so regenerated Codex/Kiro skill docs will also be telemetry-free. You may need to re-run `./setup` after stripping.
+
+---
 
 ## License
 
 MIT
+
+---
+
+*gstack is built by [Garry Tan](https://github.com/garrytan/gstack). This project is not affiliated with or endorsed by gstack. We just think great tools deserve great privacy defaults.*
