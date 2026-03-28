@@ -20,7 +20,7 @@ After patching, the script regenerates all `SKILL.md` files and verifies no tele
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/voxhominis/gstack-no-telemetry/main/strip-telemetry.sh \
+curl -fsSL https://raw.githubusercontent.com/VXNCXNX/gstack-no-telemetry/main/strip-telemetry.sh \
   -o ~/.gstack/strip-telemetry.sh && chmod +x ~/.gstack/strip-telemetry.sh
 ```
 
