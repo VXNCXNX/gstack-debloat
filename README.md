@@ -58,15 +58,13 @@ Custom gstack location:
 
 ### Automatic (recommended)
 
-Add this to your `~/.claude/CLAUDE.md`:
+Add this to your `~/.claude/CLAUDE.md` (or paste it into the Claude Code / Codex CLI as a prompt):
 
-```markdown
-## gstack Post-Upgrade
-
-After any gstack upgrade completes (after `./setup` finishes), run `~/.gstack/strip-telemetry.sh` to remove telemetry. This is non-negotiable -- always run it.
+```
+Download https://raw.githubusercontent.com/VXNCXNX/gstack-no-telemetry/main/strip-telemetry.sh to ~/.gstack/strip-telemetry.sh, make it executable, and run it. Then add a "gstack Post-Upgrade" section to my ~/.claude/CLAUDE.md that tells you to always run ~/.gstack/strip-telemetry.sh after any gstack upgrade.
 ```
 
-Claude will strip telemetry automatically after every `/gstack-upgrade`. You never think about it again.
+That's it. Claude handles the install, runs the strip, and wires itself up to do it again after every future upgrade.
 
 ---
 
