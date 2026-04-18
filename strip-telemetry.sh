@@ -6,6 +6,7 @@
 # This script strips it cleanly after every install or upgrade.
 #
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
+# Compatible with gstack v0.x and v1.x.
 #
 # Usage: ./strip-telemetry.sh [GSTACK_DIR]
 #   GSTACK_DIR defaults to ~/.claude/skills/gstack
@@ -22,136 +23,144 @@ if [ ! -f "$PREAMBLE" ]; then
 fi
 
 # Guard: skip if already stripped
-if ! grep -q 'generateTelemetryPrompt' "$PREAMBLE" 2>/dev/null; then
+if ! grep -q 'generateTelemetryPrompt\|gstack-telemetry-log' "$PREAMBLE" 2>/dev/null; then
   echo "strip-telemetry: telemetry already removed -- nothing to do"
   exit 0
 fi
 
 echo "strip-telemetry: patching $GSTACK_DIR ..."
 
-# -- 1. Patch preamble.ts -----------------------------------------------------
+# -- 1. Patch preamble.ts (all via python3 for reliability) -------------------
 
-# Use a temp file for multi-pass sed (portable across macOS/Linux)
-TMP=$(mktemp)
-
-# 1a. Remove telemetry vars from generatePreambleBash
-#     Delete from "_TEL=$(" through the "done" that closes the .pending loop
-sed '/^_TEL=\$(/,/^done$/d' "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-
-# 1b. Remove the analytics mkdir, JSONL write, and zsh comment that precede _TEL
-sed '/^mkdir -p ~\/.gstack\/analytics$/d' "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-sed "/^echo '.*skill-usage\.jsonl/d" "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-sed '/^# zsh-compatible: use find instead of glob/d' "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-
-# 1c. Remove _TEL_START and _SESSION_ID lines
-sed '/_TEL_START=\$(date/d' "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-sed '/_SESSION_ID="/d' "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-
-# 1d. Remove TELEMETRY and TEL_PROMPTED echo lines
-sed '/echo "TELEMETRY:/d' "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-sed '/echo "TEL_PROMPTED:/d' "$PREAMBLE" > "$TMP" && mv "$TMP" "$PREAMBLE"
-
-# 1e. Remove the entire generateTelemetryPrompt function and references
-python3 -c "
+python3 << PYEOF
 import re, sys
-content = open('$PREAMBLE').read()
-# Remove generateTelemetryPrompt function
+
+with open('$PREAMBLE', 'r') as f:
+    content = f.read()
+
+original = content
+
+# 1a. Remove generateTelemetryPrompt function (v0 + v1 compatible)
 content = re.sub(
-    r'function generateTelemetryPrompt\(ctx: TemplateContext\): string \{.*?\n\}\n\n',
+    r'\nfunction generateTelemetryPrompt\(.*?\n\}\n',
     '',
     content,
     flags=re.DOTALL
 )
-# Remove generateTelemetryPrompt from preamble composition
-content = content.replace('    generateTelemetryPrompt(ctx),\n', '')
-# Fix proactive prompt: TEL_PROMPTED -> LAKE_INTRO
+
+# 1b. Remove generateTelemetryPrompt from preamble composition array
+content = re.sub(r'[ \t]*generateTelemetryPrompt\(ctx\),\n', '', content)
+
+# 1c. Fix proactive prompt gate: TEL_PROMPTED -> LAKE_INTRO (v0 used TEL_PROMPTED as gate)
 content = content.replace(
-    \"PROACTIVE_PROMPTED\\\` is \\\`no\\\` AND \\\`TEL_PROMPTED\\\` is \\\`yes\\\`: After telemetry is handled,\",
-    \"PROACTIVE_PROMPTED\\\` is \\\`no\\\` AND \\\`LAKE_INTRO\\\` is \\\`yes\\\`: After the lake intro is handled,\"
+    "PROACTIVE_PROMPTED\` is \`no\` AND \`TEL_PROMPTED\` is \`yes\`: After telemetry is handled,",
+    "PROACTIVE_PROMPTED\` is \`no\` AND \`LAKE_INTRO\` is \`yes\`: After the lake intro is handled,"
 )
-# Remove telemetry epilogue from generateCompletionStatus
+
+# 1d. Remove telemetry epilogue section (## Telemetry (run last) ... through the closing paragraph)
+#     Handles variation in ending text across versions
 content = re.sub(
-    r'## Telemetry \(run last\).*?remote binary only runs if telemetry is not off and the binary exists\.\n\n',
+    r'## Telemetry \(run last\).*?(?:remote binary only runs if telemetry is not off and the binary exists\.|The local JSONL always logs\..*?)\n\n',
     '',
     content,
     flags=re.DOTALL
 )
-# Clean up docstring
-content = content.replace(
-    'The preamble provides: update checks, session tracking, user preferences,\n * repo mode detection, and telemetry.',
-    'The preamble provides: update checks, session tracking, user preferences,\n * and repo mode detection.'
-)
-content = content.replace(
-    'Telemetry data flow:\n *   1. Always: local JSONL append to ~/.gstack/analytics/ (inline, inspectable)\n *   2. If _TEL != \"off\" AND binary exists: gstack-telemetry-log for remote reporting\n */\n',
-    '*/\n'
-)
-# Fix tier comment
-content = content.replace('T1: core + upgrade + lake + telemetry + voice', 'T1: core + upgrade + lake + proactive + voice')
-open('$PREAMBLE', 'w').write(content)
-" 2>/dev/null
 
-echo "  patched preamble.ts"
+# 1e. Remove _TEL, _TEL_START, _SESSION_ID, analytics lines from bash template strings
+#     These may appear as literal bash inside TS template literals
+content = re.sub(r'^[ \t]*_TEL=\$\(.*?^[ \t]*done\n', '', content, flags=re.DOTALL | re.MULTILINE)
+content = re.sub(r'^[ \t]*_TEL_START=\$\(date.*\n', '', content, flags=re.MULTILINE)
+content = re.sub(r'^[ \t]*_SESSION_ID=".*\n', '', content, flags=re.MULTILINE)
+content = re.sub(r'^[ \t]*echo "TELEMETRY:.*\n', '', content, flags=re.MULTILINE)
+content = re.sub(r'^[ \t]*echo "TEL_PROMPTED:.*\n', '', content, flags=re.MULTILINE)
+content = re.sub(r'^[ \t]*mkdir -p ~/\.gstack/analytics.*\n', '', content, flags=re.MULTILINE)
+content = re.sub(r'^[ \t]*echo .*skill-usage\.jsonl.*\n', '', content, flags=re.MULTILINE)
+content = re.sub(r'^[ \t]*# zsh-compatible: use find instead of glob.*\n', '', content, flags=re.MULTILINE)
 
-# -- 2. Delete telemetry binaries ----------------------------------------------
+# 1f. Remove telemetry data flow docstring block
+content = re.sub(
+    r' \* Telemetry data flow:\n(?: \*.*\n)*',
+    '',
+    content
+)
+
+# 1g. Clean up telemetry mention in class/function docstring
+content = content.replace(
+    ' * repo mode detection, and telemetry.',
+    ' * and repo mode detection.'
+)
+
+# 1h. Fix tier comment if present
+content = content.replace(
+    'T1: core + upgrade + lake + telemetry + voice',
+    'T1: core + upgrade + lake + proactive + voice'
+)
+
+if content == original:
+    print("  WARNING: preamble.ts unchanged -- patterns may not have matched", file=sys.stderr)
+    sys.exit(1)
+
+with open('$PREAMBLE', 'w') as f:
+    f.write(content)
+
+print("  patched preamble.ts")
+PYEOF
+
+# -- 2. Delete telemetry binaries ---------------------------------------------
 
 for bin in gstack-telemetry-log gstack-telemetry-sync gstack-analytics; do
-  rm -f "$GSTACK_DIR/bin/$bin"
+  rm -f "$GSTACK_DIR/bin/$bin" "$GSTACK_DIR/bin/${bin}.exe"
 done
 echo "  deleted telemetry binaries"
 
-# -- 3. Patch tests ------------------------------------------------------------
+# -- 3. Patch tests -----------------------------------------------------------
 
 if [ -f "$TEST_FILE" ]; then
-  python3 -c "
+  python3 << PYEOF
 import re
-content = open('$TEST_FILE').read()
 
-# Remove 'generated SKILL.md contains telemetry line' test
+with open('$TEST_FILE', 'r') as f:
+    content = f.read()
+
+# Remove telemetry-related test cases
 content = re.sub(
-    r\"  test\('generated SKILL\.md contains telemetry line'.*?\n  \}\);\n\n\",
+    r"  test\('generated SKILL\.md contains telemetry line'.*?\n  \}\);\n\n",
+    '',
+    content,
+    flags=re.DOTALL
+)
+content = re.sub(
+    r"  test\('preamble \.pending-\\\*.*?\n  \}\);\n\n",
+    '',
+    content,
+    flags=re.DOTALL
+)
+content = re.sub(
+    r"  test\('preamble-using skills have correct skill name in telemetry'.*?\n  \}\);\n\n",
+    '',
+    content,
+    flags=re.DOTALL
+)
+content = re.sub(
+    r"describe\('telemetry'.*?\n\}\);\n",
     '',
     content,
     flags=re.DOTALL
 )
 
-# Remove 'preamble .pending-* glob is zsh-safe' test
-content = re.sub(
-    r\"  test\('preamble \.pending-\\\\\* glob is zsh-safe.*?\n  \}\);\n\n\",
-    '',
-    content,
-    flags=re.DOTALL
-)
-
-# Remove 'preamble-using skills have correct skill name in telemetry' test
-content = re.sub(
-    r\"  test\('preamble-using skills have correct skill name in telemetry'.*?\n  \}\);\n\n\",
-    '',
-    content,
-    flags=re.DOTALL
-)
-
-# Remove entire describe('telemetry') block
-content = re.sub(
-    r\"describe\('telemetry'.*?\n\}\);\n\",
-    '',
-    content,
-    flags=re.DOTALL
-)
-
-# Update codex path test: remove gstack-telemetry-log reference
+# Update path/assertion tests
 content = content.replace(
-    \"content.includes('gstack-config') || content.includes('gstack-update-check') || content.includes('gstack-telemetry-log')\",
-    \"content.includes('gstack-config') || content.includes('gstack-update-check')\"
+    "content.includes('gstack-config') || content.includes('gstack-update-check') || content.includes('gstack-telemetry-log')",
+    "content.includes('gstack-config') || content.includes('gstack-update-check')"
 )
-
-# Update codex telemetry path assertion
 content = content.replace(
-    \"expect(content).not.toContain('~/.codex/skills/gstack/bin/gstack-config get telemetry');\",
-    \"// Telemetry removed\\n    expect(content).not.toContain('telemetry');\"
+    "expect(content).not.toContain('~/.codex/skills/gstack/bin/gstack-config get telemetry');",
+    "// Telemetry removed\n    expect(content).not.toContain('telemetry');"
 )
 
-open('$TEST_FILE', 'w').write(content)
-" 2>/dev/null
+with open('$TEST_FILE', 'w') as f:
+    f.write(content)
+PYEOF
   echo "  patched tests"
 fi
 
@@ -161,12 +170,21 @@ echo "  regenerating SKILL.md files..."
 (cd "$GSTACK_DIR" && bun run gen:skill-docs 2>/dev/null)
 echo "  regenerated all SKILL.md files"
 
-# -- 5. Verify -----------------------------------------------------------------
+# -- 5. Verify ----------------------------------------------------------------
+# Note: checkpoint/SKILL.md uses _TEL_START as a session duration timer (not
+# telemetry), so we exclude it from the check.
 
-REMAINING=$(grep -rl 'gstack-telemetry-log\|_TEL_START\|TEL_PROMPTED\|generateTelemetryPrompt' "$GSTACK_DIR"/*/SKILL.md "$PREAMBLE" 2>/dev/null || true)
-if [ -n "$REMAINING" ]; then
+REMAINING=$(grep -rl 'gstack-telemetry-log\|TEL_PROMPTED\|generateTelemetryPrompt' \
+  "$GSTACK_DIR"/*/SKILL.md "$PREAMBLE" 2>/dev/null || true)
+# Also check for _TEL_START but exclude checkpoint (legitimate timing use)
+TEL_START_REMAINING=$(grep -rl '_TEL_START' \
+  "$GSTACK_DIR"/*/SKILL.md "$PREAMBLE" 2>/dev/null \
+  | grep -v 'checkpoint/SKILL.md' || true)
+
+if [ -n "$REMAINING" ] || [ -n "$TEL_START_REMAINING" ]; then
   echo "  WARNING: telemetry references still found in:" >&2
-  echo "$REMAINING" >&2
+  [ -n "$REMAINING" ] && echo "$REMAINING" >&2
+  [ -n "$TEL_START_REMAINING" ] && echo "$TEL_START_REMAINING" >&2
   exit 1
 fi
 
