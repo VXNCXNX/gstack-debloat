@@ -2,13 +2,13 @@
 
 **gstack is the best skills framework for AI coding agents.** It makes Claude Code, Codex, and Gemini dramatically more capable. The QA testing, code review, shipping workflows, design audits... genuinely great software.
 
-It also phones home.
+It also persists more than most people realize.
 
-Every skill invocation logs to local JSONL files. An opt-in prompt pushes for "community" or "anonymous" telemetry via a remote binary. Session IDs, skill names, durations, outcomes, timestamps... all tracked. Even if you say "no thanks," the local analytics directory still gets written to on every single skill run.
+Remote telemetry is only one layer. gstack also writes local analytics, session timelines, and project learnings to `~/.gstack/`. That means skill names, timestamps, outcomes, durations, and AI-generated "learnings" can still accumulate on disk even when telemetry is set to `off`.
 
 **Privacy is not a feature request. It's a requirement.**
 
-This script removes all telemetry from gstack. Cleanly, completely, and automatically after every update.
+This script removes both telemetry and the separate timeline/learnings persistence layer from gstack. Cleanly, completely, and automatically after every update.
 
 ---
 
@@ -20,16 +20,21 @@ This script removes all telemetry from gstack. Cleanly, completely, and automati
 | `generateTelemetryPrompt()` | The opt-in prompt (community/anonymous/off) | Yes |
 | `TEL_PROMPTED` flag | Tracks whether you've been asked about telemetry | Yes |
 | `~/.gstack/analytics/` writes | Local JSONL logging on every skill run | Yes |
+| `~/.gstack/projects/*/timeline.jsonl` | Per-project session timeline | Yes |
+| `~/.gstack/projects/*/learnings.jsonl` | Per-project AI-generated learnings | Yes |
 | `.pending-*` file handling | Deferred telemetry finalization | Yes |
 | "Telemetry (run last)" epilogue | End-of-skill duration + outcome logging | Yes |
 | `gstack-telemetry-log` | Remote telemetry binary | Deleted |
 | `gstack-telemetry-sync` | Remote telemetry sync binary | Deleted |
 | `gstack-analytics` | Analytics CLI binary | Deleted |
+| `gstack-timeline-log` / `gstack-timeline-read` | Timeline persistence/readback binaries | Neutralized |
+| `gstack-learnings-log` / `gstack-learnings-search` | Learnings persistence/readback binaries | Neutralized |
+| `{{LEARNINGS_SEARCH}}` / `{{LEARNINGS_LOG}}` | Generated skill-doc injections for learnings | Removed |
 | Telemetry test assertions | Tests that would fail after stripping | Removed |
 
-After patching, the script regenerates all 30+ `SKILL.md` files and verifies zero telemetry references remain.
+After patching, the script regenerates all 30+ `SKILL.md` files and verifies that telemetry, timeline, and learnings references are gone from generated skills.
 
-**What stays:** Everything that makes gstack useful. Update checks, session tracking, skill discovery, repo mode detection, proactive suggestions, the browse daemon, all skill workflows. Nothing functional is touched.
+**What stays:** Everything that makes gstack useful. Update checks, skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. Nothing user-facing is removed except persisted memory features.
 
 ---
 
@@ -74,15 +79,15 @@ The script is **idempotent**. Run it once, run it ten times. If telemetry is alr
 
 Five phases:
 
-1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` to remove telemetry variables, the opt-in prompt function, the telemetry epilogue, and analytics writes. Fixes the proactive prompt dependency chain that was gated on telemetry state.
+1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` to remove telemetry variables, timeline startup logging, learnings injection, and timeline-based context recovery. Fixes the proactive prompt dependency chain that was gated on telemetry state.
 
-2. **Delete binaries** -- Removes the three telemetry executables from `bin/`.
+2. **Patch custom sources** -- Removes the custom learnings write-paths that live outside the generic resolver flow, including review and investigate templates.
 
-3. **Patch tests** -- Strips telemetry-specific test cases so the suite stays green.
+3. **Neutralize binaries** -- Replaces telemetry, timeline, and learnings binaries in `bin/` with no-op stubs so even stale generated docs cannot write persisted state.
 
-4. **Regenerate** -- Runs `bun run gen:skill-docs` to rebuild all skill files from the patched source.
+4. **Patch tests** -- Strips telemetry-specific test cases so the suite stays green.
 
-5. **Verify** -- Greps every generated `SKILL.md` and the source for telemetry references. Fails loudly if anything slipped through.
+5. **Regenerate and verify** -- Rebuilds all skill files from the patched source, then greps for telemetry/timeline/learnings references and fails loudly if anything slipped through.
 
 ### Requirements
 
@@ -93,19 +98,19 @@ Five phases:
 
 ## Why not just set telemetry to "off"?
 
-Because `gstack-config set telemetry off` only disables the **remote** binary. The local analytics directory still gets created. The JSONL file still gets appended to on every skill run. The session ID is still generated. The duration timer still runs. The pending-file mechanism still executes.
+Because `gstack-config set telemetry off` only disables the **remote** binary. The local analytics directory still gets created. The JSONL file still gets appended to on every skill run. Separate session timeline and learnings files can still be written under `~/.gstack/projects/`.
 
-"Off" means "we still collect it, we just don't send it." This script means "there is nothing to collect."
+"Off" means "we still collect it locally, we just don't send it remotely." This script means "there is nothing left to collect."
 
 ---
 
 ## FAQ
 
 **Does this break gstack?**
-No. Every functional feature works exactly the same. The script only removes code paths that exist solely for telemetry. Tests pass (214/215, the one pre-existing failure is unrelated to telemetry).
+No. Core gstack workflows still work. The script removes telemetry and persisted local memory features. The main behavioral change is that timeline/history/learnings-based context recovery no longer exists, by design.
 
-**Will gstack updates re-add telemetry?**
-Yes, every time. That's why the CLAUDE.md instruction exists. Claude runs the script automatically after each upgrade.
+**Will gstack updates re-add this stuff?**
+Yes. Upstream updates can reintroduce telemetry, timeline logging, and learnings persistence. That is why the CLAUDE.md instruction exists.
 
 **Does this work with vendored/local installs?**
 Yes. Pass the install path as an argument: `~/.gstack/strip-telemetry.sh ./path/to/gstack`
