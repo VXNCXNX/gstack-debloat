@@ -9,10 +9,6 @@
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
 # Compatible with gstack v0.x through v1.6+.
 #
-# v1.6 refactored preamble.ts into sub-modules under scripts/resolvers/preamble/.
-# This script patches both the legacy monolith (v0.x/v1.0-v1.5) and the new
-# sub-module layout (v1.6+) so it stays current across upgrades.
-#
 # Usage: ./strip-telemetry.sh [GSTACK_DIR]
 #   GSTACK_DIR defaults to ~/.claude/skills/gstack
 # ============================================================================
@@ -20,210 +16,161 @@ set -euo pipefail
 
 GSTACK_DIR="${1:-$HOME/.claude/skills/gstack}"
 
-# Legacy monolith path (v0.x / v1.0-v1.5)
-PREAMBLE="$GSTACK_DIR/scripts/resolvers/preamble.ts"
-
-# Shared resolver files (all versions)
-LEARNINGS="$GSTACK_DIR/scripts/resolvers/learnings.ts"
-REVIEW_RESOLVER="$GSTACK_DIR/scripts/resolvers/review.ts"
-REVIEW_ARMY_RESOLVER="$GSTACK_DIR/scripts/resolvers/review-army.ts"
-INVESTIGATE_TMPL="$GSTACK_DIR/investigate/SKILL.md.tmpl"
-LEARN_TMPL="$GSTACK_DIR/learn/SKILL.md.tmpl"
-TEST_FILE="$GSTACK_DIR/test/gen-skill-docs.test.ts"
-
-# v1.6+ sub-module paths
-PREAMBLE_BASH="$GSTACK_DIR/scripts/resolvers/preamble/generate-preamble-bash.ts"
-PREAMBLE_TELEMETRY_PROMPT="$GSTACK_DIR/scripts/resolvers/preamble/generate-telemetry-prompt.ts"
-PREAMBLE_COMPLETION_STATUS="$GSTACK_DIR/scripts/resolvers/preamble/generate-completion-status.ts"
-PREAMBLE_CONTEXT_RECOVERY="$GSTACK_DIR/scripts/resolvers/preamble/generate-context-recovery.ts"
-
-if [ ! -f "$PREAMBLE" ] && [ ! -f "$PREAMBLE_BASH" ]; then
+if [ ! -f "$GSTACK_DIR/scripts/resolvers/preamble.ts" ] && \
+   [ ! -f "$GSTACK_DIR/scripts/resolvers/preamble/generate-preamble-bash.ts" ]; then
   echo "strip-telemetry: no preamble found at $GSTACK_DIR -- skipping" >&2
   exit 0
 fi
 
 echo "strip-telemetry: patching $GSTACK_DIR ..."
 
-# -- 1a. Patch legacy monolith preamble.ts (v0.x / v1.0-v1.5) -----------------
-if [ -f "$PREAMBLE" ]; then
-python3 - "$PREAMBLE" "$LEARNINGS" "$REVIEW_RESOLVER" "$REVIEW_ARMY_RESOLVER" "$INVESTIGATE_TMPL" "$LEARN_TMPL" <<'PYEOF'
+# Write the full Python patcher to a temp file (avoids heredoc->python3 stdin
+# forking issues on Windows/Cygwin Git Bash).
+_TMP=$(mktemp /tmp/gstack_strip_XXXXXX.py 2>/dev/null || mktemp)
+trap 'rm -f "$_TMP"' EXIT
+
+cat > "$_TMP" << 'PYEOF'
+#!/usr/bin/env python3
+"""
+gstack telemetry strip — all phases in one Python process.
+Called by strip-telemetry.sh with GSTACK_DIR as argv[1].
+"""
 from pathlib import Path
-import re
-import sys
+import re, sys, shutil
 
-preamble = Path(sys.argv[1])
-learnings = Path(sys.argv[2])
-review_resolver = Path(sys.argv[3])
-review_army_resolver = Path(sys.argv[4])
-investigate_tmpl = Path(sys.argv[5])
-learn_tmpl = Path(sys.argv[6])
+GSTACK_DIR = Path(sys.argv[1])
 
-content = preamble.read_text(encoding='utf-8')
-original = content
+# ─── helpers ──────────────────────────────────────────────────────────────────
 
-content = content.replace(
-    " * The preamble provides: update checks, session tracking, user preferences,\n * repo mode detection, and telemetry.\n *\n * Telemetry data flow:\n *   1. Always: local JSONL append to ~/.gstack/analytics/ (inline, inspectable)\n *   2. If _TEL != \"off\" AND binary exists: gstack-telemetry-log for remote reporting\n",
-    " * The preamble provides: update checks, user preferences, and repo mode detection.\n",
-)
-content = content.replace(
-    " * The preamble provides: update checks, session tracking, user preferences,\n * and repo mode detection.\n",
-    " * The preamble provides: update checks, user preferences, and repo mode detection.\n",
-)
+def patch(path: Path, fn):
+    """Read path, apply fn(content)->content, write back iff changed."""
+    if not path.exists():
+        return
+    orig = path.read_text(encoding='utf-8')
+    result = fn(orig)
+    if result == orig:
+        print(f"  {path.name} already clean", file=sys.stderr)
+    else:
+        path.write_text(result, encoding='utf-8')
 
-# Remove remote telemetry prompt and references
-content = re.sub(
-    r'\nfunction generateTelemetryPrompt\(.*?\n\}\n',
-    '\n',
-    content,
-    flags=re.DOTALL,
-)
-content = re.sub(r'[ \t]*generateTelemetryPrompt\(ctx\),\n', '', content)
-
-# Remove telemetry shell block from the preamble bash template
-content = re.sub(
-    r'_TEL=\$\(.*?^done\n',
-    '',
-    content,
-    flags=re.DOTALL | re.MULTILINE,
-)
-
-# Remove local learnings/timeline injection block from the preamble bash template
-content = re.sub(
-    r'# Learnings count\n.*?^# Check if CLAUDE\.md has routing rules\n',
-    '# Check if CLAUDE.md has routing rules\n',
-    content,
-    flags=re.DOTALL | re.MULTILINE,
-)
-
-# Fix proactive prompt dependency after removing telemetry prompt
-content = content.replace(
-    "If \\`PROACTIVE_PROMPTED\\` is \\`no\\` AND \\`TEL_PROMPTED\\` is \\`yes\\`: After telemetry is handled,\n",
-    "If \\`PROACTIVE_PROMPTED\\` is \\`no\\` AND \\`LAKE_INTRO\\` is \\`yes\\`: After the lake intro is handled,\n",
-)
-
-# Remove completion-time telemetry/learnings sections
-content = re.sub(
-    r'## Operational Self-Improvement.*?## Plan Mode Safe Operations',
-    '## Plan Mode Safe Operations',
-    content,
-    flags=re.DOTALL,
-)
-
-content = content.replace(
-    '- \\`codex exec\\` / \\`codex review\\` (outside voice, plan review, adversarial challenge)\n- Writing to \\`~/.gstack/\\` (config, analytics, review logs, design artifacts, learnings)\n',
-    '- \\`codex exec\\` / \\`codex review\\` (outside voice, plan review, adversarial challenge)\n- Writing to \\`~/.gstack/\\` (config, review logs, design artifacts)\n',
-)
-
-# Remove timeline-based context recovery and predictive suggestions
-content = re.sub(
-    r'  # Timeline summary \(last 5 events\)\n.*?  _LATEST_CP=',
-    '  _LATEST_CP=',
-    content,
-    flags=re.DOTALL,
-)
-content = content.replace(
-    'If \\`LAST_SESSION\\` is shown, mention it briefly: "Last session on this branch ran\n/[skill] with [outcome]." If \\`LATEST_CHECKPOINT\\` exists, read it for full context\non where work left off.\n\nIf \\`RECENT_PATTERN\\` is shown, look at the skill sequence. If a pattern repeats\n(e.g., review,ship,review), suggest: "Based on your recent pattern, you probably\nwant /[next skill]."\n\n**Welcome back message:** If any of LAST_SESSION, LATEST_CHECKPOINT, or RECENT ARTIFACTS\nare shown, synthesize a one-paragraph welcome briefing before proceeding:\n"Welcome back to {branch}. Last session: /{skill} ({outcome}). [Checkpoint summary if\navailable]. [Health score if available]." Keep it to 2-3 sentences.',
-    'If \\`LATEST_CHECKPOINT\\` exists, read it for full context on where work left off.\n\n**Welcome back message:** If any of LATEST_CHECKPOINT or RECENT ARTIFACTS\nare shown, synthesize a one-paragraph welcome briefing before proceeding:\n"Welcome back to {branch}. [Checkpoint summary if available]. [Health score if\navailable]." Keep it to 2-3 sentences.',
-)
-
-content = content.replace(
-    'T1: core + upgrade + lake + telemetry + voice',
-    'T1: core + upgrade + lake + proactive + voice',
-)
-
-# v1.6: comment block split across lines with "model overlays, and\n * telemetry"
-content = re.sub(
-    r' \* tracking, user preferences, repo mode detection, model overlays, and\n'
-    r' \* telemetry\.\n'
-    r' \*\n'
-    r' \* Telemetry data flow:\n'
-    r' \*   1\. Always: local JSONL append to ~/\.gstack/analytics/ \(inline, inspectable\)\n'
-    r' \*   2\. If _TEL != "off" AND binary exists: gstack-telemetry-log for remote reporting\n',
-    ' * tracking, user preferences, and repo mode detection.\n',
-    content,
-)
-
-if content == original:
-    print("  preamble.ts already stripped or no telemetry block matched", file=sys.stderr)
-
-preamble.write_text(content, encoding='utf-8')
-PYEOF
-fi
-
-# -- 1b. Patch v1.6+ sub-modules -----------------------------------------------
-# In v1.6 the preamble was split into ~20 sub-modules under
-# scripts/resolvers/preamble/. Each telemetry concern now lives in its own file.
-
-if [ -f "$PREAMBLE_BASH" ]; then
-python3 - "$PREAMBLE_BASH" "$PREAMBLE_TELEMETRY_PROMPT" "$PREAMBLE_COMPLETION_STATUS" "$PREAMBLE_CONTEXT_RECOVERY" <<'PYEOF'
-from pathlib import Path
-import re
-import sys
-
-preamble_bash       = Path(sys.argv[1])
-telemetry_prompt    = Path(sys.argv[2])
-completion_status   = Path(sys.argv[3])
-context_recovery    = Path(sys.argv[4])
-
-# ---- generate-preamble-bash.ts ----
-if preamble_bash.exists():
-    content = preamble_bash.read_text(encoding='utf-8')
-    original = content
-
-    # Remove _TEL / _TEL_PROMPTED / _TEL_START / _SESSION_ID vars + echo lines
-    content = re.sub(
-        r'_TEL=\$\([^)]*gstack-config get telemetry[^\n]*\)\n'
-        r'_TEL_PROMPTED=\$\([^\n]*\)\n'
-        r'_TEL_START=\$\([^\n]*\)\n'
-        r'_SESSION_ID=[^\n]*\n'
-        r'echo "[^\n]*TELEMETRY[^\n]*"\n'
-        r'echo "[^\n]*TEL_PROMPTED[^\n]*"\n',
-        '',
-        content,
-    )
-
-    # Remove analytics mkdir + conditional JSONL write block
-    content = re.sub(
+def strip_skill_usage(path: Path) -> None:
+    """Remove skill-usage.jsonl write blocks from any file."""
+    if not path.exists():
+        return
+    c = path.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(
         r'mkdir -p ~/\.gstack/analytics\n'
-        r'if \[ "\$_TEL" != "off" \]; then\n'
-        r'echo[^\n]*skill-usage\.jsonl[^\n]*\n'
-        r'fi\n',
-        '',
-        content,
+        r"echo '\{\"skill\":\"[^\"]*\"[^\n]*skill-usage\.jsonl[^\n]*\n",
+        '', c,
     )
+    c = re.sub(r"echo '[^\n]*skill-usage\.jsonl[^\n]*\n", '', c)
+    if c != orig:
+        path.write_text(c, encoding='utf-8')
 
-    # Remove .pending-* finalization loop
-    content = re.sub(
-        r'# zsh-compatible.*?^done\n',
-        '',
-        content,
-        flags=re.DOTALL | re.MULTILINE,
+# ─── Phase 1a: legacy monolith preamble.ts (v0.x / v1.0-v1.5) ───────────────
+
+def patch_preamble_monolith(c: str) -> str:
+    # v1.5 comment form
+    c = c.replace(
+        " * The preamble provides: update checks, session tracking, user preferences,\n"
+        " * repo mode detection, and telemetry.\n"
+        " *\n"
+        " * Telemetry data flow:\n"
+        " *   1. Always: local JSONL append to ~/.gstack/analytics/ (inline, inspectable)\n"
+        ' *   2. If _TEL != "off" AND binary exists: gstack-telemetry-log for remote reporting\n',
+        " * The preamble provides: update checks, user preferences, and repo mode detection.\n",
     )
-
-    # Remove learnings count block
-    content = re.sub(
-        r'# Learnings count\n.*?echo "LEARNINGS: 0"\nfi\n',
-        '',
-        content,
-        flags=re.DOTALL,
+    c = c.replace(
+        " * The preamble provides: update checks, session tracking, user preferences,\n"
+        " * and repo mode detection.\n",
+        " * The preamble provides: update checks, user preferences, and repo mode detection.\n",
     )
-
-    # Remove session timeline start log line
-    content = re.sub(
-        r'# Session timeline: record skill start.*?2>/dev/null &\n',
-        '',
-        content,
-        flags=re.DOTALL,
+    # v1.6 comment form
+    c = re.sub(
+        r' \* tracking, user preferences, repo mode detection, model overlays, and\n'
+        r' \* telemetry\.\n'
+        r' \*\n'
+        r' \* Telemetry data flow:\n'
+        r' \*   1\. Always: local JSONL append to ~/\.gstack/analytics/ \(inline, inspectable\)\n'
+        r' \*   2\. If _TEL != "off" AND binary exists: gstack-telemetry-log for remote reporting\n',
+        ' * tracking, user preferences, and repo mode detection.\n',
+        c,
     )
+    c = re.sub(r'\nfunction generateTelemetryPrompt\(.*?\n\}\n', '\n', c, flags=re.DOTALL)
+    c = re.sub(r'[ \t]*generateTelemetryPrompt\(ctx\),\n', '', c)
+    c = re.sub(r'_TEL=\$\(.*?^done\n', '', c, flags=re.DOTALL | re.MULTILINE)
+    c = re.sub(
+        r'# Learnings count\n.*?^# Check if CLAUDE\.md has routing rules\n',
+        '# Check if CLAUDE.md has routing rules\n',
+        c, flags=re.DOTALL | re.MULTILINE,
+    )
+    c = c.replace(
+        r"If \`PROACTIVE_PROMPTED\` is \`no\` AND \`TEL_PROMPTED\` is \`yes\`: After telemetry is handled,",
+        r"If \`PROACTIVE_PROMPTED\` is \`no\` AND \`LAKE_INTRO\` is \`yes\`: After the lake intro is handled,",
+    )
+    c = re.sub(r'## Operational Self-Improvement.*?## Plan Mode Safe Operations', '## Plan Mode Safe Operations', c, flags=re.DOTALL)
+    c = c.replace(
+        '- \\`codex exec\\` / \\`codex review\\` (outside voice, plan review, adversarial challenge)\n'
+        '- Writing to \\`~/.gstack/\\` (config, analytics, review logs, design artifacts, learnings)\n',
+        '- \\`codex exec\\` / \\`codex review\\` (outside voice, plan review, adversarial challenge)\n'
+        '- Writing to \\`~/.gstack/\\` (config, review logs, design artifacts)\n',
+    )
+    c = re.sub(r'  # Timeline summary \(last 5 events\)\n.*?  _LATEST_CP=', '  _LATEST_CP=', c, flags=re.DOTALL)
+    c = c.replace(
+        'If \\`LAST_SESSION\\` is shown, mention it briefly: "Last session on this branch ran\n'
+        '/[skill] with [outcome]." If \\`LATEST_CHECKPOINT\\` exists, read it for full context\n'
+        'on where work left off.\n\n'
+        'If \\`RECENT_PATTERN\\` is shown, look at the skill sequence. If a pattern repeats\n'
+        '(e.g., review,ship,review), suggest: "Based on your recent pattern, you probably\n'
+        'want /[next skill]."\n\n'
+        '**Welcome back message:** If any of LAST_SESSION, LATEST_CHECKPOINT, or RECENT ARTIFACTS\n'
+        'are shown, synthesize a one-paragraph welcome briefing before proceeding:\n'
+        '"Welcome back to {branch}. Last session: /{skill} ({outcome}). [Checkpoint summary if\n'
+        'available]. [Health score if available]." Keep it to 2-3 sentences.',
+        'If \\`LATEST_CHECKPOINT\\` exists, read it for full context on where work left off.\n\n'
+        '**Welcome back message:** If any of LATEST_CHECKPOINT or RECENT ARTIFACTS\n'
+        'are shown, synthesize a one-paragraph welcome briefing before proceeding:\n'
+        '"Welcome back to {branch}. [Checkpoint summary if available]. [Health score if\n'
+        'available]." Keep it to 2-3 sentences.',
+    )
+    c = c.replace('T1: core + upgrade + lake + telemetry + voice', 'T1: core + upgrade + lake + proactive + voice')
+    return c
 
-    if content == original:
-        print("  generate-preamble-bash.ts already stripped or patterns changed", file=sys.stderr)
-    preamble_bash.write_text(content, encoding='utf-8')
+preamble_mono = GSTACK_DIR / 'scripts/resolvers/preamble.ts'
+if preamble_mono.exists():
+    patch(preamble_mono, patch_preamble_monolith)
 
-# ---- generate-telemetry-prompt.ts ----
-# Replace entirely - just return empty string, no prompt shown to users
-if telemetry_prompt.exists():
-    telemetry_prompt.write_text(
+# ─── Phase 1b: v1.6+ sub-modules ─────────────────────────────────────────────
+
+preamble_bash = GSTACK_DIR / 'scripts/resolvers/preamble/generate-preamble-bash.ts'
+if preamble_bash.exists():
+    def _patch_bash(c):
+        c = re.sub(
+            r'_TEL=\$\([^)]*gstack-config get telemetry[^\n]*\)\n'
+            r'_TEL_PROMPTED=\$\([^\n]*\)\n'
+            r'_TEL_START=\$\([^\n]*\)\n'
+            r'_SESSION_ID=[^\n]*\n'
+            r'echo "[^\n]*TELEMETRY[^\n]*"\n'
+            r'echo "[^\n]*TEL_PROMPTED[^\n]*"\n',
+            '', c,
+        )
+        c = re.sub(
+            r'mkdir -p ~/\.gstack/analytics\n'
+            r'if \[ "\$_TEL" != "off" \]; then\n'
+            r'echo[^\n]*skill-usage\.jsonl[^\n]*\n'
+            r'fi\n',
+            '', c,
+        )
+        c = re.sub(r'# zsh-compatible.*?^done\n', '', c, flags=re.DOTALL | re.MULTILINE)
+        c = re.sub(r'# Learnings count\n.*?echo "LEARNINGS: 0"\nfi\n', '', c, flags=re.DOTALL)
+        c = re.sub(r'# Session timeline: record skill start.*?2>/dev/null &\n', '', c, flags=re.DOTALL)
+        return c
+    patch(preamble_bash, _patch_bash)
+
+tel_prompt = GSTACK_DIR / 'scripts/resolvers/preamble/generate-telemetry-prompt.ts'
+if tel_prompt.exists():
+    tel_prompt.write_text(
         "import type { TemplateContext } from '../types';\n\n"
         "export function generateTelemetryPrompt(_ctx: TemplateContext): string {\n"
         "  return '';\n"
@@ -231,89 +178,59 @@ if telemetry_prompt.exists():
         encoding='utf-8',
     )
 
-# ---- generate-completion-status.ts ----
-# Remove Operational Self-Improvement (learnings-log) + Telemetry (run last) sections
-if completion_status.exists():
-    content = completion_status.read_text(encoding='utf-8')
-    original = content
+completion = GSTACK_DIR / 'scripts/resolvers/preamble/generate-completion-status.ts'
+if completion.exists():
+    def _patch_completion(c):
+        c = re.sub(r'## Operational Self-Improvement\n.*?(?=## Plan Mode Safe Operations)', '', c, flags=re.DOTALL)
+        c = re.sub(
+            r"(writes to `~~/\.gstack/`[^\n]*)analytics,? ?([^\n]*\n)",
+            lambda m: m.group(0).replace('analytics, ', '').replace(', analytics', ''),
+            c,
+        )
+        return c
+    patch(completion, _patch_completion)
 
-    # Strip both sections in one pass (they appear consecutively before Plan Mode Safe Ops)
-    content = re.sub(
-        r'## Operational Self-Improvement\n.*?(?=## Plan Mode Safe Operations)',
-        '',
-        content,
-        flags=re.DOTALL,
-    )
+ctx_recovery = GSTACK_DIR / 'scripts/resolvers/preamble/generate-context-recovery.ts'
+if ctx_recovery.exists():
+    def _patch_ctx(c):
+        c = re.sub(r'  # Timeline summary \(last 5 events\)\n.*?  _LATEST_CP=', '  _LATEST_CP=', c, flags=re.DOTALL)
+        c = re.sub(r"If `LAST_SESSION` is shown.*?want /\[next skill\]\.\"\n\n", '', c, flags=re.DOTALL)
+        c = c.replace(
+            '**Welcome back message:** If any of LAST_SESSION, LATEST_CHECKPOINT, or RECENT ARTIFACTS',
+            '**Welcome back message:** If any of LATEST_CHECKPOINT or RECENT ARTIFACTS',
+        )
+        c = re.sub(
+            r'"Welcome back to \{branch\}\. Last session: /\[skill\] \(\[outcome\]\)\. \[Checkpoint summary if\navailable\]\.',
+            '"Welcome back to {branch}. [Checkpoint summary if available].',
+            c,
+        )
+        return c
+    patch(ctx_recovery, _patch_ctx)
 
-    # Remove analytics mention from Plan Mode Safe Operations allowed list
-    content = re.sub(
-        r"(writes to `~~/\.gstack/`[^\n]*analytics[^\n]*\n)",
-        lambda m: m.group(0).replace(', analytics', '').replace('analytics, ', ''),
-        content,
-    )
-    # Handle the compact single-line form used in v1.6
-    content = re.sub(
-        r'(writes to `~~/\.gstack/` \(config), analytics,? (review logs)',
-        r'\1, \2',
-        content,
-    )
+proactive = GSTACK_DIR / 'scripts/resolvers/preamble/generate-proactive-prompt.ts'
+if proactive.exists():
+    def _patch_proactive(c):
+        return c.replace(
+            r'If \`PROACTIVE_PROMPTED\` is \`no\` AND \`TEL_PROMPTED\` is \`yes\`: After telemetry is handled,',
+            r'If \`PROACTIVE_PROMPTED\` is \`no\` AND \`LAKE_INTRO\` is \`yes\`: After the lake intro is handled,',
+        )
+    patch(proactive, _patch_proactive)
 
-    if content == original:
-        print("  generate-completion-status.ts already stripped or patterns changed", file=sys.stderr)
-    completion_status.write_text(content, encoding='utf-8')
+search_building = GSTACK_DIR / 'scripts/resolvers/preamble/generate-search-before-building.ts'
+if search_building.exists():
+    def _patch_search(c):
+        return re.sub(
+            r'\n\n\*\*Eureka:\*\*[^\n]*\n'
+            r'\\`\\`\\`bash\n'
+            r'[^\n]*eureka\.jsonl[^\n]*\n'
+            r'\\`\\`\\`',
+            '', c,
+        )
+    patch(search_building, _patch_search)
 
-# ---- generate-context-recovery.ts ----
-# Remove timeline.jsonl bash reads + LAST_SESSION / RECENT_PATTERN instruction text
-if context_recovery.exists():
-    content = context_recovery.read_text(encoding='utf-8')
-    original = content
+# ─── Phase 1c: shared resolvers + skill-specific ─────────────────────────────
 
-    # Remove the timeline tail + cross-session injection bash block
-    content = re.sub(
-        r'  # Timeline summary \(last 5 events\)\n.*?  _LATEST_CP=',
-        '  _LATEST_CP=',
-        content,
-        flags=re.DOTALL,
-    )
-
-    # Remove LAST_SESSION and RECENT_PATTERN instruction paragraphs
-    content = re.sub(
-        r"If `LAST_SESSION` is shown.*?want /\[next skill\]\.\"\n\n",
-        '',
-        content,
-        flags=re.DOTALL,
-    )
-
-    # Fix welcome-back message to drop LAST_SESSION reference
-    content = content.replace(
-        '**Welcome back message:** If any of LAST_SESSION, LATEST_CHECKPOINT, or RECENT ARTIFACTS',
-        '**Welcome back message:** If any of LATEST_CHECKPOINT or RECENT ARTIFACTS',
-    )
-    content = re.sub(
-        r'"Welcome back to \{branch\}\. Last session: /\[skill\] \(\[outcome\]\)\. \[Checkpoint summary if\navailable\]\.',
-        '"Welcome back to {branch}. [Checkpoint summary if available].',
-        content,
-    )
-
-    if content == original:
-        print("  generate-context-recovery.ts already stripped or patterns changed", file=sys.stderr)
-    context_recovery.write_text(content, encoding='utf-8')
-PYEOF
-fi
-
-# -- 1c. Patch shared resolver sources (all versions) -------------------------
-python3 - "$LEARNINGS" "$REVIEW_RESOLVER" "$REVIEW_ARMY_RESOLVER" "$INVESTIGATE_TMPL" "$LEARN_TMPL" <<'PYEOF'
-from pathlib import Path
-import re
-import sys
-
-learnings           = Path(sys.argv[1])
-review_resolver     = Path(sys.argv[2])
-review_army_resolver= Path(sys.argv[3])
-investigate_tmpl    = Path(sys.argv[4])
-learn_tmpl          = Path(sys.argv[5])
-
-# Remove generic learnings resolver output entirely
+learnings = GSTACK_DIR / 'scripts/resolvers/learnings.ts'
 if learnings.exists():
     learnings.write_text(
         "import type { TemplateContext } from './types';\n\n"
@@ -326,170 +243,312 @@ if learnings.exists():
         encoding='utf-8',
     )
 
-# Remove custom learnings logging from the review resolver
-if review_resolver.exists():
-    review_content = review_resolver.read_text(encoding='utf-8')
-    review_content = re.sub(
-        r'### Learnings Logging \(plan-file discrepancies only\).*?### Integration with Scope Drift Detection',
-        '### Integration with Scope Drift Detection',
-        review_content,
-        flags=re.DOTALL,
-    )
-    review_resolver.write_text(review_content, encoding='utf-8')
+review_army = GSTACK_DIR / 'scripts/resolvers/review-army.ts'
+if review_army.exists():
+    def _patch_review_army(c):
+        c = re.sub(r'3\. Past learnings for this domain \(if any exist\):.*?4\. Instructions:\n', '3. Instructions:\n', c, flags=re.DOTALL)
+        c = re.sub(r"Past learnings: \{learnings or 'none'\}\n\n", '', c)
+        return c
+    patch(review_army, _patch_review_army)
 
-# Remove learnings lookup from the review-army resolver used by /review and /ship
-if review_army_resolver.exists():
-    review_army_content = review_army_resolver.read_text(encoding='utf-8')
-    review_army_content = re.sub(
-        r'3\. Past learnings for this domain \(if any exist\):.*?4\. Instructions:\n',
-        '3. Instructions:\n',
-        review_army_content,
-        flags=re.DOTALL,
-    )
-    review_army_content = re.sub(
-        r"Past learnings: \{learnings or 'none'\}\n\n",
-        '',
-        review_army_content,
-    )
-    review_army_resolver.write_text(review_army_content, encoding='utf-8')
-
-# Remove custom investigation learning capture from the investigate template
+investigate_tmpl = GSTACK_DIR / 'investigate/SKILL.md.tmpl'
 if investigate_tmpl.exists():
-    investigate_content = investigate_tmpl.read_text(encoding='utf-8')
-    investigate_content = re.sub(
-        r'Log the investigation as a learning for future sessions\..*?\{\{LEARNINGS_LOG\}\}\n',
-        '',
-        investigate_content,
-        flags=re.DOTALL,
-    )
-    investigate_tmpl.write_text(investigate_content, encoding='utf-8')
+    def _patch_investigate(c):
+        return re.sub(r'Log the investigation as a learning for future sessions\..*?\{\{LEARNINGS_LOG\}\}\n', '', c, flags=re.DOTALL)
+    patch(investigate_tmpl, _patch_investigate)
 
-# Make /learn inert so the repo no longer claims to manage learnings
+learn_tmpl = GSTACK_DIR / 'learn/SKILL.md.tmpl'
 if learn_tmpl.exists():
     learn_tmpl.write_text(
-        "---\n"
-        "name: learn\n"
-        "preamble-tier: 2\n"
-        "version: 1.0.0\n"
+        "---\nname: learn\npreamble-tier: 2\nversion: 1.0.0\n"
         "description: |\n"
         "  Legacy skill name retained for compatibility. Learnings storage is disabled\n"
-        "  by gstack-no-telemetry, so this skill now explains that there is no persisted\n"
-        "  project memory to inspect.\n"
-        "triggers:\n"
-        "  - show learnings\n"
-        "  - what have we learned\n"
-        "  - manage project learnings\n"
-        "allowed-tools:\n"
-        "  - Read\n"
-        "---\n"
-        "\n"
-        "{{PREAMBLE}}\n"
-        "\n"
-        "# Project Learnings Manager\n"
-        "\n"
-        "gstack-no-telemetry disables the learnings system entirely.\n"
-        "\n"
-        "There is no persisted project-memory state to inspect, search, prune, export, or modify.\n"
-        "\n"
-        "If you want zero retained session memory, this is the expected behavior.\n",
+        "  by gstack-no-telemetry, so this skill explains there is no persisted memory.\n"
+        "triggers:\n  - show learnings\n  - what have we learned\nallowed-tools:\n  - Read\n---\n\n"
+        "{{PREAMBLE}}\n\n# Project Learnings Manager\n\n"
+        "gstack-no-telemetry disables the learnings system entirely.\n\n"
+        "There is no persisted project-memory state to inspect, search, prune, export, or modify.\n",
         encoding='utf-8',
     )
+
+review_ts = GSTACK_DIR / 'scripts/resolvers/review.ts'
+if review_ts.exists():
+    def _patch_review(c):
+        # Match the "3. Append metrics" bash block.
+        # Use a positive lookahead for the closing template-literal backtick so
+        # we never accidentally consume it.
+        return re.sub(
+            r'\n3\. Append metrics:\n\\`\\`\\`bash\nmkdir -p[^\n]*\necho[^\n]*spec-review\.jsonl[^\n]*\n\\`\\`\\`\n'
+            r'Replace ITERATIONS[^\n]*\n'
+            r'(?=`|\\`)' ,
+            '\n', c,
+        )
+    patch(review_ts, _patch_review)
+
+# careful / freeze / guard
+for _p in [
+    GSTACK_DIR / 'careful/SKILL.md.tmpl',
+    GSTACK_DIR / 'careful/SKILL.md',
+    GSTACK_DIR / 'freeze/SKILL.md',
+    GSTACK_DIR / 'guard/SKILL.md',
+]:
+    strip_skill_usage(_p)
+
+# retro: remove Eureka Moments paragraph (references eureka.jsonl)
+retro_tmpl = GSTACK_DIR / 'retro/SKILL.md.tmpl'
+if retro_tmpl.exists():
+    c = retro_tmpl.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(
+        r'\*\*Eureka Moments \(if logged\):\*\* Read[^\n]*eureka\.jsonl[^\n]*\n'
+        r'.*?'
+        r'\| Eureka Moments \| [^\n]*\|\n',
+        '',
+        c, flags=re.DOTALL,
+    )
+    if c != orig:
+        retro_tmpl.write_text(c, encoding='utf-8')
+
+# office-hours: only strip skill-usage.jsonl, keep builder-profile.jsonl
+oh = GSTACK_DIR / 'office-hours/SKILL.md'
+if oh.exists():
+    c = oh.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(
+        r'\n2\. Log the selection to analytics:\n```bash\nmkdir -p[^\n]*\n'
+        r'echo[^\n]*skill-usage\.jsonl[^\n]*\n```\n',
+        '\n', c,
+    )
+    c = re.sub(r"echo '[^\n]*skill-usage\.jsonl[^\n]*\n", '', c)
+    if c != orig:
+        oh.write_text(c, encoding='utf-8')
+
+print("  patched generator sources", file=sys.stderr)
+
+# ─── Phase 2: neutralize telemetry binaries ───────────────────────────────────
+
+STUB = '#!/usr/bin/env bash\nexit 0\n'
+BIN_NAMES = [
+    'gstack-analytics',
+    'gstack-learnings-log',
+    'gstack-learnings-search',
+    'gstack-telemetry-log',
+    'gstack-telemetry-sync',
+    'gstack-timeline-log',
+    'gstack-timeline-read',
+]
+for name in BIN_NAMES:
+    b = GSTACK_DIR / 'bin' / name
+    if b.exists():
+        b.write_text(STUB, encoding='utf-8')
+        b.chmod(0o755)
+
+# gstack-codex-probe: stub the two logging functions (sourced, not executed)
+codex_probe = GSTACK_DIR / 'bin/gstack-codex-probe'
+if codex_probe.exists():
+    c = codex_probe.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(
+        r'(_gstack_codex_log_event\(\) \{).*?^(\})',
+        r'\1\n  return 0  # stripped by gstack-no-telemetry\n\2',
+        c, flags=re.DOTALL | re.MULTILINE,
+    )
+    c = re.sub(
+        r'(_gstack_codex_log_hang\(\) \{).*?^(\})',
+        r'\1\n  return 0  # stripped by gstack-no-telemetry\n\2',
+        c, flags=re.DOTALL | re.MULTILINE,
+    )
+    if c != orig:
+        codex_probe.write_text(c, encoding='utf-8')
+
+print("  neutralized telemetry/timeline/learnings binaries", file=sys.stderr)
+
+# ─── Phase 3: patch tests ──────────────────────────────────────────────────────
+
+test_file = GSTACK_DIR / 'test/gen-skill-docs.test.ts'
+if test_file.exists():
+    c = test_file.read_text(encoding='utf-8')
+    c = re.sub(r"  test\('generated SKILL\.md contains telemetry line'.*?\n  \}\);\n\n", '', c, flags=re.DOTALL)
+    c = re.sub(r"  test\('preamble \.pending-\\\*.*?\n  \}\);\n\n", '', c, flags=re.DOTALL)
+    c = re.sub(r"  test\('preamble-using skills have correct skill name in telemetry'.*?\n  \}\);\n\n", '', c, flags=re.DOTALL)
+    c = re.sub(r"describe\('telemetry'.*?\n\}\);\n", '', c, flags=re.DOTALL)
+    c = c.replace(
+        "content.includes('gstack-config') || content.includes('gstack-update-check') || content.includes('gstack-telemetry-log')",
+        "content.includes('gstack-config') || content.includes('gstack-update-check')",
+    )
+    c = c.replace("    expect(content).toContain('gstack-learnings-search --limit 3');\n", "    expect(content).not.toContain('gstack-learnings-search');\n")
+    c = c.replace(
+        "      expect(content).toContain('Prior Learnings');\n      expect(content).toContain('gstack-learnings-search');\n",
+        "      expect(content).not.toContain('Prior Learnings');\n      expect(content).not.toContain('gstack-learnings-search');\n",
+    )
+    c = c.replace("      expect(content).toContain('Capture Learnings');\n", "      expect(content).not.toContain('Capture Learnings');\n")
+    c = c.replace(
+        "expect(content).not.toContain('~/.codex/skills/gstack/bin/gstack-config get telemetry');",
+        "// Telemetry removed\n    expect(content).not.toContain('telemetry');",
+    )
+    test_file.write_text(c, encoding='utf-8')
+    print("  patched tests", file=sys.stderr)
+
 PYEOF
 
-echo "  patched generator sources"
 
-# -- 2. Neutralize write-path binaries ----------------------------------------
-
-for bin in \
-  gstack-analytics \
-  gstack-learnings-log \
-  gstack-learnings-search \
-  gstack-telemetry-log \
-  gstack-telemetry-sync \
-  gstack-timeline-log \
-  gstack-timeline-read
-do
-  cat > "$GSTACK_DIR/bin/$bin" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$GSTACK_DIR/bin/$bin"
-done
-echo "  neutralized telemetry/timeline/learnings binaries"
-
-# -- 3. Patch tests ------------------------------------------------------------
-
-if [ -f "$TEST_FILE" ]; then
-python3 - "$TEST_FILE" <<'PYEOF'
-from pathlib import Path
-import re
-import sys
-
-test_file = Path(sys.argv[1])
-content = test_file.read_text(encoding='utf-8')
-
-content = re.sub(
-    r"  test\('generated SKILL\.md contains telemetry line'.*?\n  \}\);\n\n",
-    '',
-    content,
-    flags=re.DOTALL,
-)
-content = re.sub(
-    r"  test\('preamble \.pending-\\\*.*?\n  \}\);\n\n",
-    '',
-    content,
-    flags=re.DOTALL,
-)
-content = re.sub(
-    r"  test\('preamble-using skills have correct skill name in telemetry'.*?\n  \}\);\n\n",
-    '',
-    content,
-    flags=re.DOTALL,
-)
-content = re.sub(
-    r"describe\('telemetry'.*?\n\}\);\n",
-    '',
-    content,
-    flags=re.DOTALL,
-)
-content = content.replace(
-    "content.includes('gstack-config') || content.includes('gstack-update-check') || content.includes('gstack-telemetry-log')",
-    "content.includes('gstack-config') || content.includes('gstack-update-check')",
-)
-content = content.replace(
-    "    expect(content).toContain('gstack-learnings-search --limit 3');\n",
-    "    expect(content).not.toContain('gstack-learnings-search');\n",
-)
-content = content.replace(
-    "      expect(content).toContain('Prior Learnings');\n      expect(content).toContain('gstack-learnings-search');\n",
-    "      expect(content).not.toContain('Prior Learnings');\n      expect(content).not.toContain('gstack-learnings-search');\n",
-)
-content = content.replace(
-    "      expect(content).toContain('Capture Learnings');\n",
-    "      expect(content).not.toContain('Capture Learnings');\n",
-)
-content = content.replace(
-    "expect(content).not.toContain('~/.codex/skills/gstack/bin/gstack-config get telemetry');",
-    "// Telemetry removed\n    expect(content).not.toContain('telemetry');",
-)
-
-test_file.write_text(content, encoding='utf-8')
-PYEOF
-  echo "  patched tests"
-fi
+# -- Phases 1a-3: run the Python patcher --------------------------------------
+python3 "$_TMP" "$GSTACK_DIR"
 
 # -- 4. Regenerate SKILL.md files ---------------------------------------------
-
 echo "  regenerating SKILL.md files..."
 (cd "$GSTACK_DIR" && bun run gen:skill-docs >/dev/null)
 echo "  regenerated all SKILL.md files"
 
+# -- 4.5. Write Phase 4.5+4.6 Python patcher to temp file --------------------
+_TMP2=$(mktemp /tmp/gstack_strip2_XXXXXX.py 2>/dev/null || mktemp)
+trap 'rm -f "$_TMP" "$_TMP2"' EXIT
+
+cat > "$_TMP2" << 'PYEOF2'
+#!/usr/bin/env python3
+"""
+Phase 4.5: re-strip careful/freeze/guard/office-hours after gen:skill-docs regeneration.
+Phase 4.6: strip .agents/ copy.
+"""
+from pathlib import Path
+import re, sys
+
+GSTACK_DIR = Path(sys.argv[1])
+
+def strip_skill_usage(path: Path) -> None:
+    if not path.exists():
+        return
+    c = path.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(
+        r'mkdir -p ~/\.gstack/analytics\n'
+        r"echo '\{\"skill\":\"[^\"]*\"[^\n]*skill-usage\.jsonl[^\n]*\n",
+        '', c,
+    )
+    c = re.sub(r"echo '[^\n]*skill-usage\.jsonl[^\n]*\n", '', c)
+    if c != orig:
+        path.write_text(c, encoding='utf-8')
+
+# Phase 4.5: re-patch after regeneration
+for _p in [
+    GSTACK_DIR / 'careful/SKILL.md',
+    GSTACK_DIR / 'freeze/SKILL.md',
+    GSTACK_DIR / 'guard/SKILL.md',
+]:
+    strip_skill_usage(_p)
+
+# retro: re-strip Eureka Moments paragraph after regeneration
+retro_md = GSTACK_DIR / 'retro/SKILL.md'
+if retro_md.exists():
+    c = retro_md.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(
+        r'\*\*Eureka Moments \(if logged\):\*\* Read[^\n]*eureka\.jsonl[^\n]*\n'
+        r'.*?'
+        r'\| Eureka Moments \| [^\n]*\|\n',
+        '',
+        c, flags=re.DOTALL,
+    )
+    if c != orig:
+        retro_md.write_text(c, encoding='utf-8')
+
+oh = GSTACK_DIR / 'office-hours/SKILL.md'
+if oh.exists():
+    c = oh.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(
+        r'\n2\. Log the selection to analytics:\n```bash\nmkdir -p[^\n]*\n'
+        r'echo[^\n]*skill-usage\.jsonl[^\n]*\n```\n',
+        '\n', c,
+    )
+    c = re.sub(r"echo '[^\n]*skill-usage\.jsonl[^\n]*\n", '', c)
+    if c != orig:
+        oh.write_text(c, encoding='utf-8')
+
+# Phase 4.6: strip .agents/ copy
+STUB = '#!/usr/bin/env bash\nexit 0\n'
+BIN_NAMES = [
+    'gstack-analytics', 'gstack-learnings-log', 'gstack-learnings-search',
+    'gstack-telemetry-log', 'gstack-telemetry-sync',
+    'gstack-timeline-log', 'gstack-timeline-read',
+]
+
+agents_dir = GSTACK_DIR / '.agents/skills/gstack'
+if agents_dir.exists():
+    for name in BIN_NAMES:
+        b = agents_dir / 'bin' / name
+        if b.exists():
+            b.write_text(STUB, encoding='utf-8')
+            b.chmod(0o755)
+
+    for p in agents_dir.rglob('SKILL.md'):
+        c = p.read_text(encoding='utf-8')
+        orig = c
+        c = re.sub(
+            r'_TEL=\$\([^)]*gstack-config get telemetry[^\n]*\)\n'
+            r'_TEL_PROMPTED=\$\([^\n]*\)\n'
+            r'_TEL_START=\$\([^\n]*\)\n'
+            r'_SESSION_ID=[^\n]*\n'
+            r'echo "[^\n]*TELEMETRY[^\n]*"\n'
+            r'echo "[^\n]*TEL_PROMPTED[^\n]*"\n',
+            '', c,
+        )
+        c = re.sub(
+            r'mkdir -p ~/\.gstack/analytics\n'
+            r'if \[ "\$_TEL" != "off" \]; then\n'
+            r'echo[^\n]*skill-usage\.jsonl[^\n]*\n'
+            r'fi\n',
+            '', c,
+        )
+        c = re.sub(
+            r'mkdir -p ~/\.gstack/analytics\n'
+            r"echo '\{\"skill\":[^\n]*skill-usage\.jsonl[^\n]*\n",
+            '', c,
+        )
+        c = re.sub(r'# zsh-compatible.*?^done\n', '', c, flags=re.DOTALL | re.MULTILINE)
+        c = re.sub(r'# Learnings count\n.*?echo "LEARNINGS: 0"\nfi\n', '', c, flags=re.DOTALL)
+        c = re.sub(r'# Session timeline: record skill start.*?2>/dev/null &\n', '', c, flags=re.DOTALL)
+        c = re.sub(r'## Operational Self-Improvement.*?## Plan Mode Safe Operations', '## Plan Mode Safe Operations', c, flags=re.DOTALL)
+        c = re.sub(r'\n_TEL_END=\$\(date.*?2>/dev/null &\nfi\n', '\n', c, flags=re.DOTALL)
+        c = re.sub(
+            r"(Writing to `~/.gstack/`[^\n]*)analytics,? ?",
+            lambda m: m.group(0).replace('analytics, ', '').replace(', analytics', ''),
+            c,
+        )
+        c = re.sub(r'echo[^\n]*skill-usage\.jsonl[^\n]*\n', '', c)
+        c = re.sub(r'echo[^\n]*spec-review\.jsonl[^\n]*\n', '', c)
+        c = re.sub(r'echo[^\n]*eureka\.jsonl[^\n]*\n', '', c)
+        c = re.sub(r'[ \t]*~[^\n]*gstack-learnings-log[^\n]*\n', '', c)
+        c = re.sub(r'[ \t]*~[^\n]*gstack-learnings-search[^\n]*\n', '', c)
+        c = re.sub(r'[^\n]*timeline\.jsonl[^\n]*\n', '', c)
+        if c != orig:
+            p.write_text(c, encoding='utf-8')
+
+    print("  stripped .agents/ copy", file=sys.stderr)
+
+PYEOF2
+
+python3 "$_TMP2" "$GSTACK_DIR"
+
 # -- 5. Verify ----------------------------------------------------------------
 
-# Build the list of source files to check (only files that exist)
-_VERIFY_SOURCES=""
-for f in "$PREAMBLE" "$PREAMBLE_BASH" "$PREAMBLE_TELEMETRY_PROMPT" "$PREAMBLE_COMPLETION_STATUS" "$PREAMBLE_CONTEXT_RECOVERY" "$LEARNINGS" "$REVIEW_RESOLVER" "$REVIEW_ARMY_RESOLVER" "$INVESTIGATE_TMPL" "$LEARN_TMPL"; do
-  [ -f "$f" ] && _VERIFY_SOURCES="$_VERIFY_SOURCES $f"
+_SOURCES=""
+for _f in \
+  "$GSTACK_DIR/scripts/resolvers/preamble.ts" \
+  "$GSTACK_DIR/scripts/resolvers/preamble/generate-preamble-bash.ts" \
+  "$GSTACK_DIR/scripts/resolvers/preamble/generate-telemetry-prompt.ts" \
+  "$GSTACK_DIR/scripts/resolvers/preamble/generate-completion-status.ts" \
+  "$GSTACK_DIR/scripts/resolvers/preamble/generate-context-recovery.ts" \
+  "$GSTACK_DIR/scripts/resolvers/preamble/generate-proactive-prompt.ts" \
+  "$GSTACK_DIR/scripts/resolvers/preamble/generate-search-before-building.ts" \
+  "$GSTACK_DIR/scripts/resolvers/learnings.ts" \
+  "$GSTACK_DIR/scripts/resolvers/review.ts" \
+  "$GSTACK_DIR/scripts/resolvers/review-army.ts" \
+  "$GSTACK_DIR/investigate/SKILL.md.tmpl" \
+  "$GSTACK_DIR/learn/SKILL.md.tmpl" \
+  "$GSTACK_DIR/careful/SKILL.md.tmpl"
+do
+  [ -f "$_f" ] && _SOURCES="$_SOURCES $_f"
 done
 
 REMAINING=$(grep -RIn \
@@ -504,7 +563,26 @@ REMAINING=$(grep -RIn \
   -e 'Capture Learnings' \
   -e 'timeline.jsonl' \
   -e 'learnings.jsonl' \
-  "$GSTACK_DIR"/*/SKILL.md $_VERIFY_SOURCES 2>/dev/null || true)
+  -e 'eureka.jsonl' \
+  -e 'spec-review.jsonl' \
+  "$GSTACK_DIR"/*/SKILL.md \
+  ${_SOURCES} \
+  2>/dev/null || true)
+
+_AGENTS_DIR="$GSTACK_DIR/.agents/skills/gstack"
+if [ -d "$_AGENTS_DIR" ]; then
+  _AGENTS_REMAINING=$(grep -RIn \
+    -e 'gstack-telemetry-log' \
+    -e 'gstack-timeline-log' \
+    -e 'gstack-learnings-log' \
+    -e 'gstack-learnings-search' \
+    -e 'timeline.jsonl' \
+    -e 'learnings.jsonl' \
+    -e 'skill-usage.jsonl' \
+    "$_AGENTS_DIR"/*/SKILL.md \
+    2>/dev/null || true)
+  REMAINING="$REMAINING$_AGENTS_REMAINING"
+fi
 
 if [ -n "$REMAINING" ]; then
   echo "  WARNING: references still found in:" >&2
