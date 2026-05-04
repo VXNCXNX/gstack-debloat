@@ -683,6 +683,123 @@ if agents_dir.exists():
 
     print("  stripped .agents/ copy", file=sys.stderr)
 
+# Phase 4.7: strip ~/.codex/skills/gstack* copy (Codex CLI install)
+codex_skills = Path.home() / '.codex/skills'
+if codex_skills.exists():
+    # Stub binaries in the main gstack/ subdir
+    codex_main_bin = codex_skills / 'gstack' / 'bin'
+    if codex_main_bin.exists():
+        for name in BIN_NAMES:
+            b = codex_main_bin / name
+            if b.exists():
+                b.write_text(STUB, encoding='utf-8')
+                b.chmod(0o755)
+
+    # Strip telemetry from every gstack* SKILL.md (one main + N prefixed skills)
+    for skill_dir in codex_skills.glob('gstack*'):
+        if not skill_dir.is_dir():
+            continue
+        for p in skill_dir.rglob('SKILL.md'):
+            c = p.read_text(encoding='utf-8')
+            orig = c
+            # v1.6 telemetry header
+            c = re.sub(
+                r'_TEL=\$\([^)]*gstack-config get telemetry[^\n]*\)\n'
+                r'_TEL_PROMPTED=\$\([^\n]*\)\n'
+                r'_TEL_START=\$\([^\n]*\)\n'
+                r'_SESSION_ID=[^\n]*\n'
+                r'echo "[^\n]*TELEMETRY[^\n]*"\n'
+                r'echo "[^\n]*TEL_PROMPTED[^\n]*"\n',
+                '', c,
+            )
+            c = re.sub(
+                r'mkdir -p ~/\.gstack/analytics\n'
+                r'if \[ "\$_TEL" != "off" \]; then\n'
+                r'echo[^\n]*skill-usage\.jsonl[^\n]*\n'
+                r'fi\n',
+                '', c,
+            )
+            c = re.sub(
+                r'mkdir -p ~/\.gstack/analytics\n'
+                r"echo '\{\"skill\":[^\n]*skill-usage\.jsonl[^\n]*\n",
+                '', c,
+            )
+            c = re.sub(r'# zsh-compatible.*?^done\n', '', c, flags=re.DOTALL | re.MULTILINE)
+            c = re.sub(r'# Learnings count\n.*?echo "LEARNINGS: 0"\nfi\n', '', c, flags=re.DOTALL)
+            c = re.sub(r'# Session timeline: record skill start.*?2>/dev/null &\n', '', c, flags=re.DOTALL)
+            c = re.sub(r'## Operational Self-Improvement.*?## Plan Mode Safe Operations', '## Plan Mode Safe Operations', c, flags=re.DOTALL)
+            c = re.sub(r'\n_TEL_END=\$\(date.*?2>/dev/null &\nfi\n', '\n', c, flags=re.DOTALL)
+            c = re.sub(
+                r"(Writing to `~/.gstack/`[^\n]*)analytics,? ?",
+                lambda m: m.group(0).replace('analytics, ', '').replace(', analytics', ''),
+                c,
+            )
+            # v1.26 pending-finalize block (codex variant uses $GSTACK_BIN)
+            c = re.sub(
+                r"for _PF in \$\(find ~/\.gstack/analytics -maxdepth 1 -name '\.pending-\*' 2>/dev/null\); do\n"
+                r'  if \[ -f "\$_PF" \]; then\n'
+                r'    if \[ "\$_TEL" != "off" \] && \[ -x "\$GSTACK_BIN/gstack-telemetry-log" \]; then\n'
+                r'      \$GSTACK_BIN/gstack-telemetry-log [^\n]+\n'
+                r'    fi\n'
+                r'    rm -f "\$_PF" 2>/dev/null \|\| true\n'
+                r'  fi\n'
+                r'  break\n'
+                r'done\n',
+                '', c,
+            )
+            # v1.26 slug + learnings count block (codex variant)
+            c = re.sub(
+                r'eval "\$\(\$GSTACK_BIN/gstack-slug 2>/dev/null\)" 2>/dev/null \|\| true\n'
+                r'_LEARN_FILE="\$\{GSTACK_HOME:-\$HOME/\.gstack\}/projects/\$\{SLUG:-unknown\}/learnings\.jsonl"\n'
+                r'if \[ -f "\$_LEARN_FILE" \]; then\n'
+                r'  _LEARN_COUNT=\$\(wc -l < "\$_LEARN_FILE"[^\n]+\n'
+                r'  echo "LEARNINGS: \$_LEARN_COUNT entries loaded"\n'
+                r'  if \[ "\$_LEARN_COUNT" -gt 5 \] 2>/dev/null; then\n'
+                r'    \$GSTACK_BIN/gstack-learnings-search --limit 3[^\n]+\n'
+                r'  fi\n'
+                r'else\n'
+                r'  echo "LEARNINGS: 0"\n'
+                r'fi\n',
+                '', c,
+            )
+            # v1.26 timeline-log line (codex variant)
+            c = re.sub(
+                r'\$GSTACK_BIN/gstack-timeline-log [^\n]+\n',
+                '', c,
+            )
+            # Multi-line $GSTACK_ROOT/bin/gstack-learnings-log JSON block (review.ts plan-discrepancy)
+            c = re.sub(
+                r'\$GSTACK_ROOT/bin/gstack-learnings-log \'\{\n'
+                r'.*?'
+                r"^\}'\n",
+                '', c, flags=re.DOTALL | re.MULTILINE,
+            )
+            # jq-based eureka writes
+            c = re.sub(
+                r"jq -n[^\n]*>> ~/\.gstack/analytics/eureka\.jsonl[^\n]*\n",
+                '', c,
+            )
+            # Stragglers — wipe any line referencing stripped bins or jsonl files
+            c = re.sub(r'echo[^\n]*skill-usage\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'echo[^\n]*spec-review\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'echo[^\n]*eureka\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'cat ~/\.gstack/analytics/skill-usage\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*gstack-learnings-log[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*gstack-learnings-search[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*gstack-timeline-log[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*gstack-timeline-read[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*gstack-telemetry-log[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*gstack-telemetry-sync[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*timeline\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*learnings\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*eureka\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*spec-review\.jsonl[^\n]*\n', '', c)
+            c = re.sub(r'[^\n]*skill-usage\.jsonl[^\n]*\n', '', c)
+            if c != orig:
+                p.write_text(c, encoding='utf-8')
+
+    print("  stripped ~/.codex/skills/gstack* copy", file=sys.stderr)
+
 PYEOF2
 
 python3 "$_TMP2" "$GSTACK_DIR"
