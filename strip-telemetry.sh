@@ -285,12 +285,14 @@ if review_ts.exists():
         )
     patch(review_ts, _patch_review)
 
-# careful / freeze / guard
+# careful / freeze / guard / unfreeze (v1.26 added unfreeze skill-usage write)
 for _p in [
     GSTACK_DIR / 'careful/SKILL.md.tmpl',
     GSTACK_DIR / 'careful/SKILL.md',
     GSTACK_DIR / 'freeze/SKILL.md',
     GSTACK_DIR / 'guard/SKILL.md',
+    GSTACK_DIR / 'unfreeze/SKILL.md.tmpl',
+    GSTACK_DIR / 'unfreeze/SKILL.md',
 ]:
     strip_skill_usage(_p)
 
@@ -322,6 +324,160 @@ if oh.exists():
     c = re.sub(r"echo '[^\n]*skill-usage\.jsonl[^\n]*\n", '', c)
     if c != orig:
         oh.write_text(c, encoding='utf-8')
+
+# ─── Phase 1d: gstack v1.26+ regenerated layout ───────────────────────────────
+# v1.26 introduced new code paths in the sub-module generators that the
+# v1.6-shaped patches above don't match. Strip them surgically here.
+
+preamble_bash_v126 = GSTACK_DIR / 'scripts/resolvers/preamble/generate-preamble-bash.ts'
+if preamble_bash_v126.exists():
+    def _patch_bash_v126(c):
+        # .pending-* finalize loop
+        c = re.sub(
+            r"for _PF in \$\(find ~/\.gstack/analytics -maxdepth 1 -name '\.pending-\*' 2>/dev/null\); do\n"
+            r'  if \[ -f "\$_PF" \]; then\n'
+            r'    if \[ "\$_TEL" != "off" \] && \[ -x "\$\{ctx\.paths\.binDir\}/gstack-telemetry-log" \]; then\n'
+            r'      \$\{ctx\.paths\.binDir\}/gstack-telemetry-log [^\n]+\n'
+            r'    fi\n'
+            r'    rm -f "\$_PF" 2>/dev/null \|\| true\n'
+            r'  fi\n'
+            r'  break\n'
+            r'done\n',
+            '', c,
+        )
+        # slug eval + learnings count block
+        c = re.sub(
+            r'eval "\$\(\$\{ctx\.paths\.binDir\}/gstack-slug 2>/dev/null\)" 2>/dev/null \|\| true\n'
+            r'_LEARN_FILE="\\\$\{GSTACK_HOME:-\$HOME/\.gstack\}/projects/\\\$\{SLUG:-unknown\}/learnings\.jsonl"\n'
+            r'if \[ -f "\$_LEARN_FILE" \]; then\n'
+            r'  _LEARN_COUNT=\$\(wc -l < "\$_LEARN_FILE"[^\n]+\n'
+            r'  echo "LEARNINGS: \$_LEARN_COUNT entries loaded"\n'
+            r'  if \[ "\$_LEARN_COUNT" -gt 5 \] 2>/dev/null; then\n'
+            r'    \$\{ctx\.paths\.binDir\}/gstack-learnings-search --limit 3[^\n]+\n'
+            r'  fi\n'
+            r'else\n'
+            r'  echo "LEARNINGS: 0"\n'
+            r'fi\n',
+            '', c,
+        )
+        # timeline-log line
+        c = re.sub(
+            r'\$\{ctx\.paths\.binDir\}/gstack-timeline-log [^\n]+\n',
+            '', c,
+        )
+        return c
+    patch(preamble_bash_v126, _patch_bash_v126)
+
+completion_v126 = GSTACK_DIR / 'scripts/resolvers/preamble/generate-completion-status.ts'
+if completion_v126.exists():
+    def _patch_completion_v126(c):
+        # Remove "## Operational Self-Improvement" section through "Do not log..."
+        c = re.sub(
+            r'## Operational Self-Improvement\n\n'
+            r'Before completing[^\n]+\n\n'
+            r'\\`\\`\\`bash\n'
+            r'\$\{ctx\.paths\.binDir\}/gstack-learnings-log [^\n]+\n'
+            r'\\`\\`\\`\n\n'
+            r'Do not log obvious facts or one-time transient errors\.\n\n',
+            '', c,
+        )
+        # Remove "## Telemetry (run last)" entire section through "Replace ... before running."
+        c = re.sub(
+            r'## Telemetry \(run last\)\n\n'
+            r'.*?'
+            r'Replace \\`SKILL_NAME\\`, \\`OUTCOME\\`, and \\`USED_BROWSE\\` before running\.\n\n',
+            '', c, flags=re.DOTALL,
+        )
+        return c
+    patch(completion_v126, _patch_completion_v126)
+
+ctx_recovery_v126 = GSTACK_DIR / 'scripts/resolvers/preamble/generate-context-recovery.ts'
+if ctx_recovery_v126.exists():
+    def _patch_ctx_v126(c):
+        # Remove timeline.jsonl tail line + the if-block immediately after
+        c = re.sub(
+            r'  \[ -f "\$_PROJ/timeline\.jsonl" \] && tail -5 "\$_PROJ/timeline\.jsonl"\n'
+            r'  if \[ -f "\$_PROJ/timeline\.jsonl" \]; then\n'
+            r'    _LAST=\$\(grep [^\n]+\n'
+            r'    \[ -n "\$_LAST" \] && echo "LAST_SESSION: \$_LAST"\n'
+            r'    _RECENT_SKILLS=\$\(grep [^\n]+\n'
+            r'    \[ -n "\$_RECENT_SKILLS" \] && echo "RECENT_PATTERN: \$_RECENT_SKILLS"\n'
+            r'  fi\n',
+            '', c,
+        )
+        # Drop LAST_SESSION/RECENT_PATTERN refs from closing instruction
+        c = c.replace(
+            "If artifacts are listed, read the newest useful one. If \\`LAST_SESSION\\` or \\`LATEST_CHECKPOINT\\` appears, give a 2-sentence welcome back summary. If \\`RECENT_PATTERN\\` clearly implies a next skill, suggest it once.",
+            "If artifacts are listed, read the newest useful one. If \\`LATEST_CHECKPOINT\\` appears, give a 2-sentence welcome back summary."
+        )
+        return c
+    patch(ctx_recovery_v126, _patch_ctx_v126)
+
+review_ts_v126 = GSTACK_DIR / 'scripts/resolvers/review.ts'
+if review_ts_v126.exists():
+    def _patch_review_v126(c):
+        # Remove "3. Append metrics:" bash block (v1.26 shape).
+        # Pattern stops BEFORE the closing template-literal backtick (`;) so
+        # we don't accidentally truncate the function.
+        c = re.sub(
+            r'\n\n3\. Append metrics:\n'
+            r'\\`\\`\\`bash\n'
+            r'mkdir -p ~/\.gstack/analytics\n'
+            r"echo '\{[^\n]+spec-review\.jsonl[^\n]+\n"
+            r'\\`\\`\\`\n'
+            r'Replace ITERATIONS, FOUND, FIXED, REMAINING, SCORE with actual values from the review\.',
+            '', c,
+        )
+        # Remove "### Learnings Logging" plan-file-discrepancies section
+        c = re.sub(
+            r'### Learnings Logging \(plan-file discrepancies only\)\n\n'
+            r'.*?'
+            r'These are informational in the review output but too noisy for durable memory\.\n\n',
+            '', c, flags=re.DOTALL,
+        )
+        return c
+    patch(review_ts_v126, _patch_review_v126)
+
+# v1.26 gbrain manifests: strip filesystem knowledge-sources that point at
+# stripped jsonl files (learnings, timeline, eureka). Without this, the
+# regenerated SKILL.md still mentions those globs even though writes are gone.
+def _strip_gbrain_jsonl_sources(c):
+    return re.sub(
+        r'    - id: [^\n]+\n'
+        r'      kind: filesystem\n'
+        r'      glob: "[^"]+(?:learnings|timeline|eureka)\.jsonl"\n'
+        r'      tail: \d+\n'
+        r'      render_as: "[^"]+"\n',
+        '', c,
+    )
+
+for _tmpl in [
+    GSTACK_DIR / 'investigate/SKILL.md.tmpl',
+    GSTACK_DIR / 'office-hours/SKILL.md.tmpl',
+    GSTACK_DIR / 'retro/SKILL.md.tmpl',
+]:
+    patch(_tmpl, _strip_gbrain_jsonl_sources)
+
+# v1.26 retro: strip skill-usage.jsonl read references (no leak, but tidies output)
+def _strip_retro_skill_usage(c):
+    # bash: cat skill-usage.jsonl line + its preceding numbered comment
+    c = re.sub(
+        r'# 12\. gstack skill usage telemetry \(if available\)\n'
+        r'cat ~/\.gstack/analytics/skill-usage\.jsonl 2>/dev/null \|\| true\n\n',
+        '', c,
+    )
+    # markdown: Skill Usage paragraph + bash table block + closing instruction
+    c = re.sub(
+        r'\*\*Skill Usage \(if analytics exist\):\*\* Read `~/\.gstack/analytics/skill-usage\.jsonl`[^\n]+\n\n'
+        r'```\n'
+        r'\| Skill Usage \| [^\n]+\n'
+        r'```\n\n'
+        r'If the JSONL file doesn\'t exist or has no entries in the window, skip the Skill Usage row\.\n\n',
+        '', c,
+    )
+    return c
+
+patch(GSTACK_DIR / 'retro/SKILL.md.tmpl', _strip_retro_skill_usage)
 
 print("  patched generator sources", file=sys.stderr)
 
@@ -434,6 +590,7 @@ for _p in [
     GSTACK_DIR / 'careful/SKILL.md',
     GSTACK_DIR / 'freeze/SKILL.md',
     GSTACK_DIR / 'guard/SKILL.md',
+    GSTACK_DIR / 'unfreeze/SKILL.md',
 ]:
     strip_skill_usage(_p)
 
