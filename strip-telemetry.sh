@@ -479,6 +479,39 @@ def _strip_retro_skill_usage(c):
 
 patch(GSTACK_DIR / 'retro/SKILL.md.tmpl', _strip_retro_skill_usage)
 
+
+# ─── Phase 1e: strip office-hours self-promo (YC pitch + Founder Resources) ──
+
+def strip_oh_promo(c: str) -> str:
+    """Remove the YC apply pitch and curated Founder Resources block.
+
+    Targets the office-hours Phase 6 closing:
+      1. "Beat 2 / Beat 3 (Garry's Personal Plea)" with ycombinator.com/apply?ref=gstack.
+      2. "Then proceed to Founder Resources below." stitching lines (4 tiers).
+      3. The "Founder Resources (all tiers)" section + 34-item resource pool
+         + the open-in-browser AskUserQuestion flow.
+    Idempotent: no-op when patterns are absent.
+    """
+    c = re.sub(
+        r'\*\*Beat 2: "One more thing\."\*\*.*?'
+        r'Then proceed to Founder Resources below\.\n\n'
+        r'(?=---\n\n### If TIER = welcome_back)',
+        '', c, count=1, flags=re.DOTALL,
+    )
+    c = c.replace('Then proceed to Founder Resources below.\n\n', '')
+    c = re.sub(
+        r'### Founder Resources \(all tiers\).*?'
+        r'(?=### Next-skill recommendations)',
+        '', c, count=1, flags=re.DOTALL,
+    )
+    c = c.replace(
+        'After the plea, suggest the next step:',
+        'After the design doc is delivered, suggest the next step:',
+    )
+    return c
+
+patch(GSTACK_DIR / 'office-hours/SKILL.md.tmpl', strip_oh_promo)
+
 print("  patched generator sources", file=sys.stderr)
 
 # ─── Phase 2: neutralize telemetry binaries ───────────────────────────────────
@@ -585,6 +618,26 @@ def strip_skill_usage(path: Path) -> None:
     if c != orig:
         path.write_text(c, encoding='utf-8')
 
+def strip_oh_promo(c: str) -> str:
+    """Same patch as Phase 1e -- redefined for the post-regen Python process."""
+    c = re.sub(
+        r'\*\*Beat 2: "One more thing\."\*\*.*?'
+        r'Then proceed to Founder Resources below\.\n\n'
+        r'(?=---\n\n### If TIER = welcome_back)',
+        '', c, count=1, flags=re.DOTALL,
+    )
+    c = c.replace('Then proceed to Founder Resources below.\n\n', '')
+    c = re.sub(
+        r'### Founder Resources \(all tiers\).*?'
+        r'(?=### Next-skill recommendations)',
+        '', c, count=1, flags=re.DOTALL,
+    )
+    c = c.replace(
+        'After the plea, suggest the next step:',
+        'After the design doc is delivered, suggest the next step:',
+    )
+    return c
+
 # Phase 4.5: re-patch after regeneration
 for _p in [
     GSTACK_DIR / 'careful/SKILL.md',
@@ -619,6 +672,7 @@ if oh.exists():
         '\n', c,
     )
     c = re.sub(r"echo '[^\n]*skill-usage\.jsonl[^\n]*\n", '', c)
+    c = strip_oh_promo(c)
     if c != orig:
         oh.write_text(c, encoding='utf-8')
 
@@ -684,6 +738,8 @@ if agents_base.exists():
             c = re.sub(r'[ \t]*~[^\n]*gstack-learnings-log[^\n]*\n', '', c)
             c = re.sub(r'[ \t]*~[^\n]*gstack-learnings-search[^\n]*\n', '', c)
             c = re.sub(r'[^\n]*timeline\.jsonl[^\n]*\n', '', c)
+            if 'office-hours' in str(p):
+                c = strip_oh_promo(c)
             if c != orig:
                 p.write_text(c, encoding='utf-8')
 
@@ -801,6 +857,8 @@ if codex_skills.exists():
             c = re.sub(r'[^\n]*eureka\.jsonl[^\n]*\n', '', c)
             c = re.sub(r'[^\n]*spec-review\.jsonl[^\n]*\n', '', c)
             c = re.sub(r'[^\n]*skill-usage\.jsonl[^\n]*\n', '', c)
+            if 'office-hours' in str(p):
+                c = strip_oh_promo(c)
             if c != orig:
                 p.write_text(c, encoding='utf-8')
 
@@ -870,4 +928,27 @@ if [ -n "$REMAINING" ]; then
   exit 1
 fi
 
-echo "strip-telemetry: done -- telemetry, timeline, and learnings removed"
+# Verify office-hours self-promo strip
+_OH_FILES=""
+for _f in \
+  "$GSTACK_DIR/office-hours/SKILL.md" \
+  "$GSTACK_DIR/office-hours/SKILL.md.tmpl" \
+  "$GSTACK_DIR/.agents/skills/gstack-office-hours/SKILL.md"
+do
+  [ -f "$_f" ] && _OH_FILES="$_OH_FILES $_f"
+done
+if [ -n "$_OH_FILES" ]; then
+  PROMO_REMAINING=$(grep -InE \
+    -e 'ycombinator\.com/apply\?ref=gstack' \
+    -e "Garry Tan, the creator of GStack" \
+    -e '^### Founder Resources \(all tiers\)' \
+    ${_OH_FILES} \
+    2>/dev/null || true)
+  if [ -n "$PROMO_REMAINING" ]; then
+    echo "  WARNING: office-hours self-promo still found in:" >&2
+    echo "$PROMO_REMAINING" >&2
+    exit 1
+  fi
+fi
+
+echo "strip-telemetry: done -- telemetry, timeline, learnings, and office-hours self-promo removed"

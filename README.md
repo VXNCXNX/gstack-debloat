@@ -2,13 +2,13 @@
 
 **gstack is the best skills framework for AI coding agents.** It makes Claude Code, Codex, and Gemini dramatically more capable. The QA testing, code review, shipping workflows, design audits... genuinely great software.
 
-It also persists more than most people realize.
+It also persists more than most people realize, and it ends every `/office-hours` run with a YC apply pitch and a curated funnel of YC/Lightcone/Paul Graham resources.
 
 Remote telemetry is only one layer. gstack also writes local analytics, session timelines, and project learnings to `~/.gstack/`. That means skill names, timestamps, outcomes, durations, and AI-generated "learnings" can still accumulate on disk even when telemetry is set to `off`.
 
-**Privacy is not a feature request. It's a requirement.**
+**Privacy is not a feature request. It's a requirement. And neither is the YC apply funnel.**
 
-This script removes both telemetry and the separate timeline/learnings persistence layer from gstack. Cleanly, completely, and automatically after every update.
+This script removes telemetry, the separate timeline/learnings persistence layer, and the `/office-hours` self-promotion block from gstack. Cleanly, completely, and automatically after every update.
 
 ---
 
@@ -31,8 +31,11 @@ This script removes both telemetry and the separate timeline/learnings persisten
 | `gstack-learnings-log` / `gstack-learnings-search` | Learnings persistence/readback binaries | Neutralized |
 | `{{LEARNINGS_SEARCH}}` / `{{LEARNINGS_LOG}}` | Generated skill-doc injections for learnings | Removed |
 | Telemetry test assertions | Tests that would fail after stripping | Removed |
+| `/office-hours` "Garry's Personal Plea" | YC apply pitch (3 sub-tiers) + `ycombinator.com/apply?ref=gstack` | Removed |
+| `/office-hours` "Founder Resources (all tiers)" | 34-item curated YC / Lightcone / Paul Graham funnel + open-in-browser flow | Removed |
+| `/office-hours` `Then proceed to Founder Resources below.` stitches | Cross-tier handoff lines into the resource funnel | Removed |
 
-After patching, the script regenerates all 30+ `SKILL.md` files and verifies that telemetry, timeline, and learnings references are gone from generated skills.
+After patching, the script regenerates all 30+ `SKILL.md` files and verifies that telemetry, timeline, learnings, and office-hours self-promo references are gone from generated skills.
 
 **What stays:** Everything that makes gstack useful. Update checks, skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. Nothing user-facing is removed except persisted memory features.
 
@@ -77,7 +80,7 @@ That's it. Claude handles the install, runs the strip, and wires itself up to do
 
 The script is **idempotent**. Run it once, run it ten times. If telemetry is already gone, it exits in under a second.
 
-Five phases:
+Six phases:
 
 1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` to remove telemetry variables, timeline startup logging, learnings injection, and timeline-based context recovery. Fixes the proactive prompt dependency chain that was gated on telemetry state.
 
@@ -87,7 +90,9 @@ Five phases:
 
 4. **Patch tests** -- Strips telemetry-specific test cases so the suite stays green.
 
-5. **Regenerate and verify** -- Rebuilds all skill files from the patched source, then greps for telemetry/timeline/learnings references and fails loudly if anything slipped through.
+5. **Strip office-hours self-promo** -- Patches `office-hours/SKILL.md.tmpl` (and the regenerated `SKILL.md`, plus `.agents/` and `~/.codex/` copies) to remove the YC apply pitch and the curated "Founder Resources" funnel from Phase 6 of the closing sequence. The skill still produces the design doc and recommends the next planning skill -- it just stops pitching YC.
+
+6. **Regenerate and verify** -- Rebuilds all skill files from the patched source, then greps for telemetry/timeline/learnings references and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
 
 ### Requirements
 
