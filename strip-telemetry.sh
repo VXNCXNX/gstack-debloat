@@ -7,7 +7,7 @@
 # every install or upgrade.
 #
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
-# Compatible with gstack v0.x through v1.6+.
+# Compatible with gstack v0.x through v1.43+.
 #
 # Usage: ./strip-telemetry.sh [GSTACK_DIR]
 #   GSTACK_DIR defaults to ~/.claude/skills/gstack
@@ -256,6 +256,22 @@ if investigate_tmpl.exists():
     def _patch_investigate(c):
         return re.sub(r'Log the investigation as a learning for future sessions\..*?\{\{LEARNINGS_LOG\}\}\n', '', c, flags=re.DOTALL)
     patch(investigate_tmpl, _patch_investigate)
+
+# v1.43: hardcoded "### Refresh learnings" mid-skill sections (investigate / qa /
+# ship templates). Unlike {{LEARNINGS_SEARCH}} placeholders, these embed literal
+# gstack-learnings-search bash calls, so the learnings.ts resolver patch misses
+# them. Strip header -> "useful information." paragraph + optional trailing rule.
+def _strip_refresh_learnings(c: str) -> str:
+    return re.sub(
+        r'### Refresh learnings .*?useful information\.\n\n(---\n\n)?',
+        '', c, flags=re.DOTALL,
+    )
+for _rl_tmpl in [
+    GSTACK_DIR / 'investigate/SKILL.md.tmpl',
+    GSTACK_DIR / 'qa/SKILL.md.tmpl',
+    GSTACK_DIR / 'ship/SKILL.md.tmpl',
+]:
+    patch(_rl_tmpl, _strip_refresh_learnings)
 
 learn_tmpl = GSTACK_DIR / 'learn/SKILL.md.tmpl'
 if learn_tmpl.exists():
