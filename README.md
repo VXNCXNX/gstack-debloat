@@ -30,12 +30,13 @@ This script removes telemetry, the separate timeline/learnings persistence layer
 | `gstack-timeline-log` / `gstack-timeline-read` | Timeline persistence/readback binaries | Neutralized |
 | `gstack-learnings-log` / `gstack-learnings-search` | Learnings persistence/readback binaries | Neutralized |
 | `{{LEARNINGS_SEARCH}}` / `{{LEARNINGS_LOG}}` | Generated skill-doc injections for learnings | Removed |
+| `### Refresh learnings` sections | Hardcoded mid-skill learnings re-pull blocks in `investigate` / `qa` / `ship` templates (v1.43+) | Removed |
 | Telemetry test assertions | Tests that would fail after stripping | Removed |
 | `/office-hours` "Garry's Personal Plea" | YC apply pitch (3 sub-tiers) + `ycombinator.com/apply?ref=gstack` | Removed |
 | `/office-hours` "Founder Resources (all tiers)" | 34-item curated YC / Lightcone / Paul Graham funnel + open-in-browser flow | Removed |
 | `/office-hours` `Then proceed to Founder Resources below.` stitches | Cross-tier handoff lines into the resource funnel | Removed |
 
-After patching, the script regenerates all 30+ `SKILL.md` files and verifies that telemetry, timeline, learnings, and office-hours self-promo references are gone from generated skills.
+After patching, the script regenerates all 50+ `SKILL.md` files and verifies that telemetry, timeline, learnings, and office-hours self-promo references are gone from generated skills.
 
 **What stays:** Everything that makes gstack useful. Update checks, skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. Nothing user-facing is removed except persisted memory features.
 
@@ -84,7 +85,7 @@ Six phases:
 
 1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` to remove telemetry variables, timeline startup logging, learnings injection, and timeline-based context recovery. Fixes the proactive prompt dependency chain that was gated on telemetry state.
 
-2. **Patch custom sources** -- Removes the custom learnings write-paths that live outside the generic resolver flow, including review and investigate templates.
+2. **Patch custom sources** -- Removes the custom learnings write-paths that live outside the generic resolver flow, including the `review` template and the hardcoded `### Refresh learnings` re-pull sections in the `investigate`, `qa`, and `ship` templates (added in gstack v1.43).
 
 3. **Neutralize binaries** -- Replaces telemetry, timeline, and learnings binaries in `bin/` with no-op stubs so even stale generated docs cannot write persisted state.
 
@@ -98,6 +99,13 @@ Six phases:
 
 - `bash`, `sed`, `python3` (standard on macOS and Linux)
 - `bun` (already required by gstack)
+
+### Compatibility
+
+Tested through gstack **v1.43.3.0**. The script is version-tolerant: each phase
+matches its patterns idempotently and skips cleanly when a pattern is absent, so
+it keeps working across gstack releases. New persistence surfaces introduced
+upstream are added phase by phase as they appear.
 
 ---
 
