@@ -329,6 +329,17 @@ if learnings.exists():
         encoding='utf-8',
     )
 
+# constants.ts: codexPreflight() injects a dead `_TEL=$(... get telemetry)` read
+# into every codex/ship/plan-*/review section (via {{ADVERSARIAL_STEP}} etc.). The
+# value is never consumed (the function uses _CODEX_CFG + the stubbed log fn), but
+# because it lives in a resolver it gets RE-INJECTED on every gen:skill-docs run --
+# so stripping the rendered output isn't enough; the source has to be patched too.
+constants = GSTACK_DIR / 'scripts/resolvers/constants.ts'
+if constants.exists():
+    def _patch_constants(c):
+        return re.sub(r'_TEL=\$\([^\n]*gstack-config get telemetry[^\n]*\)\n', '', c)
+    patch(constants, _patch_constants)
+
 review_army = GSTACK_DIR / 'scripts/resolvers/review-army.ts'
 if review_army.exists():
     def _patch_review_army(c):

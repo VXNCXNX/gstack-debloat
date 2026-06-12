@@ -1,5 +1,9 @@
 # gstack-debloat
 
+[![ci](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml/badge.svg)](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml)
+[![tested against gstack v1.57](https://img.shields.io/badge/tested-gstack%20v1.57-blue)](https://github.com/garrytan/gstack)
+[![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
 
 It also ships with a pile of stuff you didn't ask for: telemetry, an auto update-check that fires on **every** skill invocation, dead `gstack-config` reads in half the skills, and an `/office-hours` closing sequence that ends in a YC apply pitch plus a curated funnel of YC/Lightcone/Paul Graham resources with a "want me to open these in your browser?" prompt.
@@ -151,6 +155,10 @@ Tested through gstack **v1.57.10.0**. The script is version-tolerant: each phase
 matches its patterns idempotently and skips cleanly when a pattern is absent, so
 it keeps working across gstack releases. New persistence surfaces introduced
 upstream are added phase by phase as they appear.
+
+**CI** clones the latest gstack on every push and weekly, strips it, regenerates
+the skills, and asserts `--check` stays clean and skills still render — so
+upstream drift that reintroduces noise turns the badge red before you hit it.
 
 ---
 

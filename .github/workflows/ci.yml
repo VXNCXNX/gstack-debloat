@@ -1,0 +1,62 @@
+name: ci
+
+# Proves the strip works against a real gstack install and STAYS clean across a
+# regeneration. Runs on every push/PR, weekly (to catch upstream gstack drift),
+# and on demand.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC — catch new gstack releases
+  workflow_dispatch:
+
+jobs:
+  strip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gstack-debloat
+        uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Clone latest gstack
+        run: git clone --depth 1 https://github.com/garrytan/gstack.git "$RUNNER_TEMP/gstack"
+
+      - name: Install gstack deps
+        working-directory: ${{ runner.temp }}/gstack
+        run: bun install
+
+      - name: Record gstack version
+        run: cat "$RUNNER_TEMP/gstack/VERSION" 2>/dev/null || echo "unknown"
+
+      - name: Strip
+        run: ./strip-telemetry.sh "$RUNNER_TEMP/gstack"
+
+      - name: Check — clean after strip
+        run: ./strip-telemetry.sh --check "$RUNNER_TEMP/gstack"
+
+      - name: Idempotent — second strip is a no-op-equivalent and still exits 0
+        run: ./strip-telemetry.sh "$RUNNER_TEMP/gstack"
+
+      - name: Check — still clean after second strip
+        run: ./strip-telemetry.sh --check "$RUNNER_TEMP/gstack"
+
+      - name: Regenerate skills from patched sources
+        working-directory: ${{ runner.temp }}/gstack
+        run: bun run gen:skill-docs
+
+      - name: Check — STILL clean after regeneration (sources are patched, not just output)
+        run: ./strip-telemetry.sh --check "$RUNNER_TEMP/gstack"
+
+      - name: Smoke — skills still render with frontmatter + non-trivial body
+        working-directory: ${{ runner.temp }}/gstack
+        run: |
+          fail=0
+          for f in ship/SKILL.md review/SKILL.md office-hours/SKILL.md; do
+            [ -s "$f" ] || { echo "EMPTY: $f"; fail=1; continue; }
+            head -1 "$f" | grep -q '^---$' || { echo "NO FRONTMATTER: $f"; fail=1; }
+            [ "$(wc -l < "$f")" -ge 50 ] || { echo "TOO SHORT: $f"; fail=1; }
+          done
+          exit $fail
