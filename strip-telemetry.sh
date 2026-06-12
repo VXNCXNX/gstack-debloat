@@ -298,10 +298,10 @@ if learn_tmpl.exists():
         "---\nname: learn\npreamble-tier: 2\nversion: 1.0.0\n"
         "description: |\n"
         "  Legacy skill name retained for compatibility. Learnings storage is disabled\n"
-        "  by gstack-no-telemetry, so this skill explains there is no persisted memory.\n"
+        "  by gstack-debloat, so this skill explains there is no persisted memory.\n"
         "triggers:\n  - show learnings\n  - what have we learned\nallowed-tools:\n  - Read\n---\n\n"
         "{{PREAMBLE}}\n\n# Project Learnings Manager\n\n"
-        "gstack-no-telemetry disables the learnings system entirely.\n\n"
+        "gstack-debloat disables the learnings system entirely.\n\n"
         "There is no persisted project-memory state to inspect, search, prune, export, or modify.\n",
         encoding='utf-8',
     )
@@ -579,12 +579,12 @@ if codex_probe.exists():
     orig = c
     c = re.sub(
         r'(_gstack_codex_log_event\(\) \{).*?^(\})',
-        r'\1\n  return 0  # stripped by gstack-no-telemetry\n\2',
+        r'\1\n  return 0  # stripped by gstack-debloat\n\2',
         c, flags=re.DOTALL | re.MULTILINE,
     )
     c = re.sub(
         r'(_gstack_codex_log_hang\(\) \{).*?^(\})',
-        r'\1\n  return 0  # stripped by gstack-no-telemetry\n\2',
+        r'\1\n  return 0  # stripped by gstack-debloat\n\2',
         c, flags=re.DOTALL | re.MULTILINE,
     )
     if c != orig:

@@ -1,14 +1,12 @@
-# gstack-no-telemetry
+# gstack-debloat
 
-**gstack is the best skills framework for AI coding agents.** It makes Claude Code, Codex, and Gemini dramatically more capable. The QA testing, code review, shipping workflows, design audits... genuinely great software.
+**gstack is the best skills framework for AI coding agents.** It makes Claude Code and Codex dramatically more capable. The QA testing, code review, shipping workflows, design audits... genuinely great software.
 
-It also persists more than most people realize, and it ends every `/office-hours` run with a YC apply pitch and a curated funnel of YC/Lightcone/Paul Graham resources.
+It also ships with a pile of stuff you didn't ask for: telemetry, an auto update-check that fires on **every** skill invocation, dead `gstack-config` reads in half the skills, and an `/office-hours` closing sequence that ends in a YC apply pitch plus a curated funnel of YC/Lightcone/Paul Graham resources with a "want me to open these in your browser?" prompt.
 
-Remote telemetry is only one layer. gstack also writes local analytics, session timelines, and project learnings to `~/.gstack/`. That means skill names, timestamps, outcomes, durations, and AI-generated "learnings" can still accumulate on disk even when telemetry is set to `off`.
+Remote telemetry is only one layer. gstack also writes local analytics, session timelines, and project learnings to `~/.gstack/`. Skill names, timestamps, outcomes, durations, and AI-generated "learnings" accumulate on disk even when telemetry is set to `off`. None of it is opt-in, and all of it costs you tokens and noise on every run.
 
-**Privacy is not a feature request. It's a requirement. And neither is the YC apply funnel.**
-
-This script removes telemetry, the separate timeline/learnings persistence layer, the per-preamble auto update-check, and the `/office-hours` self-promotion block from gstack. Cleanly, completely, and automatically after every update.
+**This script strips all of it.** Telemetry, the timeline/learnings persistence layer, the auto update-check, the dead telemetry reads, and the office-hours self-promotion, gone. Cleanly, completely, and automatically after every upgrade, across every install copy (Claude Code, `.agents`, `.kiro`, `.factory`, Codex). The only thing kept is the local builder profile, because that one's actually useful and never leaves your machine.
 
 ---
 
@@ -49,7 +47,7 @@ After patching, the script regenerates all 50+ `SKILL.md` files and runs a final
 One command. Lives in `~/.gstack/` so it survives gstack updates.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VXNCXNX/gstack-no-telemetry/main/strip-telemetry.sh \
+curl -fsSL https://raw.githubusercontent.com/VXNCXNX/gstack-debloat/main/strip-telemetry.sh \
   -o ~/.gstack/strip-telemetry.sh && chmod +x ~/.gstack/strip-telemetry.sh
 ```
 
@@ -72,7 +70,7 @@ Custom gstack location:
 Add this to your `~/.claude/CLAUDE.md` (or paste it into the Claude Code / Codex CLI as a prompt):
 
 ```
-Download https://raw.githubusercontent.com/VXNCXNX/gstack-no-telemetry/main/strip-telemetry.sh to ~/.gstack/strip-telemetry.sh, make it executable, and run it. Then add a "gstack Post-Upgrade" section to my ~/.claude/CLAUDE.md that tells you to always run ~/.gstack/strip-telemetry.sh after any gstack upgrade.
+Download https://raw.githubusercontent.com/VXNCXNX/gstack-debloat/main/strip-telemetry.sh to ~/.gstack/strip-telemetry.sh, make it executable, and run it. Then add a "gstack Post-Upgrade" section to my ~/.claude/CLAUDE.md that tells you to always run ~/.gstack/strip-telemetry.sh after any gstack upgrade.
 ```
 
 That's it. Claude handles the install, runs the strip, and wires itself up to do it again after every future upgrade.
@@ -83,7 +81,7 @@ That's it. Claude handles the install, runs the strip, and wires itself up to do
 
 The script is **idempotent**. Run it once, run it ten times. If telemetry is already gone, it exits in under a second.
 
-Six phases:
+Seven phases:
 
 1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` (and the v1.6+ `generate-preamble-bash.ts` sub-module) to remove telemetry variables, timeline startup logging, learnings injection, timeline-based context recovery, and the per-preamble auto update-check. Fixes the proactive prompt dependency chain that was gated on telemetry state.
 
@@ -95,7 +93,9 @@ Six phases:
 
 5. **Strip office-hours self-promo** -- Patches `office-hours/SKILL.md.tmpl` and the Phase 6 section file `office-hours/sections/design-and-handoff.md.tmpl` (which v1.57+ Reads at runtime instead of inlining), plus the regenerated `.md` renders and the `.agents/` / `~/.codex/` copies. Removes the YC apply pitch, the curated "Founder Resources" funnel, and the "Want me to open these in your browser?" prompt from Phase 6 of the closing sequence. The skill still produces the design doc and recommends the next planning skill -- it just stops pitching YC.
 
-6. **Regenerate and verify** -- Rebuilds all skill files from the patched source, then greps for telemetry/timeline/learnings references, residual `_UPD=` update-check lines, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
+6. **Comprehensive sweep (Phase 4.8)** -- Walks every rendered `SKILL.md` and `sections/*.md` across **all** install copies (main, `.agents/`, `.kiro/`, `.factory/`, `~/.codex/`) and strips anything the targeted phases miss: standalone dead `_TEL=$(... get telemetry)` reads, orphaned stubbed-binary call lines, whole `### Refresh learnings` mini-sections, and the empty ```bash``` fences left behind. Guarded so it never leaves a dangling `$_TEL` reference, and the local builder profile is left intact.
+
+7. **Verify** -- Greps every copy for telemetry/timeline/learnings references, residual `_UPD=` and `_TEL=` lines, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
 
 ### Requirements
 
@@ -104,7 +104,7 @@ Six phases:
 
 ### Compatibility
 
-Tested through gstack **v1.43.3.0**. The script is version-tolerant: each phase
+Tested through gstack **v1.57.10.0**. The script is version-tolerant: each phase
 matches its patterns idempotently and skips cleanly when a pattern is absent, so
 it keeps working across gstack releases. New persistence surfaces introduced
 upstream are added phase by phase as they appear.
