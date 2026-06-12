@@ -33,11 +33,12 @@ This script removes telemetry, the separate timeline/learnings persistence layer
 | `### Refresh learnings` sections | Hardcoded mid-skill learnings re-pull blocks in `investigate` / `qa` / `ship` templates (v1.43+) | Removed |
 | Telemetry test assertions | Tests that would fail after stripping | Removed |
 | `_UPD=$(gstack-update-check ...)` preamble check | Auto update-check that runs on **every** skill invocation (network call + echoed output = token waste) | Removed |
+| Standalone `_TEL=$(... get telemetry)` reads | Dead telemetry reads in `codex` / `autoplan` / `review` / `plan-*-review` / `ship` steps (value never consumed; runs `gstack-config` on every invoke) | Removed |
 | `/office-hours` "Garry's Personal Plea" | YC apply pitch (3 sub-tiers) + `ycombinator.com/apply?ref=gstack` | Removed |
 | `/office-hours` "Founder Resources (all tiers)" | 34-item curated YC / Lightcone / Paul Graham funnel + open-in-browser flow | Removed |
 | `/office-hours` `Then proceed to Founder Resources below.` stitches | Cross-tier handoff lines into the resource funnel | Removed |
 
-After patching, the script regenerates all 50+ `SKILL.md` files and verifies that telemetry, timeline, learnings, auto update-check, and office-hours self-promo references are gone from generated skills.
+After patching, the script regenerates all 50+ `SKILL.md` files and runs a final comprehensive sweep (Phase 4.8) over **every** rendered skill and section file across all install copies — main, `.agents/`, `.kiro/`, `.factory/`, and `~/.codex/` — then verifies that telemetry, timeline, learnings, auto update-check, dead `_TEL=` reads, and office-hours self-promo references are gone. The local builder profile (`gstack-developer-profile`) is intentionally kept.
 
 **What stays:** Everything that makes gstack useful. Skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. The opt-in `/gstack-upgrade --force` check stays too, so you can still upgrade manually when you choose. Only the *automatic* per-preamble update-check is removed. Nothing user-facing is removed except persisted memory features and the auto update-check.
 

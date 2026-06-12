@@ -935,6 +935,106 @@ if codex_skills.exists():
 
     print("  stripped ~/.codex/skills/gstack* copy", file=sys.stderr)
 
+# ─── Phase 4.8: comprehensive runtime-noise sweep across ALL install copies ────
+# Phases 4.5-4.7 cover the main install + .agents + ~/.codex, but gstack also
+# renders .kiro/ and .factory/ skill copies that were never stripped, and the
+# telemetry regexes only matched the 6-line preamble HEADER -- not the standalone
+# `_TEL=$(... get telemetry)` reads that codex/autoplan/review/plan-*/ship steps
+# emit (dead code: the value is never consumed in those files) nor the stubbed-
+# binary call lines left behind in section files. This sweep closes all of that.
+#
+# Kept on purpose: gstack-developer-profile (local builder profile, user opted to
+# keep) and the opt-in `/gstack-upgrade --force` check (no _UPD= prefix).
+NOISE_BINS = [
+    'gstack-telemetry-log', 'gstack-telemetry-sync',
+    'gstack-timeline-log', 'gstack-timeline-read',
+    'gstack-learnings-log', 'gstack-learnings-search',
+    'gstack-analytics',
+]
+
+def strip_runtime_noise(c: str, path_str: str) -> str:
+    # 1. 6-line telemetry preamble header block (copies that still carry it)
+    c = re.sub(
+        r'_TEL=\$\([^)]*gstack-config get telemetry[^\n]*\)\n'
+        r'_TEL_PROMPTED=\$\([^\n]*\)\n'
+        r'_TEL_START=\$\([^\n]*\)\n'
+        r'_SESSION_ID=[^\n]*\n'
+        r'echo "[^\n]*TELEMETRY[^\n]*"\n'
+        r'echo "[^\n]*TEL_PROMPTED[^\n]*"\n',
+        '', c,
+    )
+    # 2. analytics jsonl writes (gated and ungated forms)
+    c = re.sub(
+        r'mkdir -p ~/\.gstack/analytics\n'
+        r'if \[ "\$_TEL" != "off" \]; then\n'
+        r'echo[^\n]*skill-usage\.jsonl[^\n]*\n'
+        r'fi\n',
+        '', c,
+    )
+    c = re.sub(
+        r'mkdir -p ~/\.gstack/analytics\n'
+        r"echo '\{\"skill\":[^\n]*skill-usage\.jsonl[^\n]*\n",
+        '', c,
+    )
+    # 3a. whole "### Refresh learnings ..." mini-sections (header -> "useful
+    #     information.") so removing the inner bash call doesn't orphan the prose.
+    c = re.sub(r'### Refresh learnings .*?useful information\.\n\n(---\n\n)?', '', c, flags=re.DOTALL)
+    # 3b. multi-line learnings-log JSON blocks, then any single-line stubbed-binary
+    #     call lines (binaries are already neutralized; the lines are pure noise)
+    c = re.sub(
+        r'[^\n]*/bin/gstack-learnings-log \'\{\n.*?^\}\'\n',
+        '', c, flags=re.DOTALL | re.MULTILINE,
+    )
+    for _bin in NOISE_BINS:
+        c = re.sub(r'[^\n]*' + re.escape(_bin) + r'[^\n]*\n', '', c)
+    # 4. update-check (per-preamble auto-check; leave --force opt-in)
+    c = re.sub(r'[^\n]*_UPD=\$\([^\n]*gstack-update-check[^\n]*\n', '', c)
+    c = re.sub(r'\[ -n "\$_UPD" \] && echo "\$_UPD" \|\| true\n', '', c)
+    # 5. zsh telemetry loop / learnings-count / timeline / self-improvement blocks
+    c = re.sub(r'# zsh-compatible.*?^done\n', '', c, flags=re.DOTALL | re.MULTILINE)
+    c = re.sub(r'# Learnings count\n.*?echo "LEARNINGS: 0"\nfi\n', '', c, flags=re.DOTALL)
+    c = re.sub(r'# Session timeline: record skill start.*?2>/dev/null &\n', '', c, flags=re.DOTALL)
+    c = re.sub(r'\n_TEL_END=\$\(date.*?2>/dev/null &\nfi\n', '\n', c, flags=re.DOTALL)
+    c = re.sub(r'## Operational Self-Improvement.*?## Plan Mode Safe Operations', '## Plan Mode Safe Operations', c, flags=re.DOTALL)
+    c = re.sub(r'[^\n]*(timeline|learnings|eureka|spec-review|skill-usage)\.jsonl[^\n]*\n', '', c)
+    # 6. standalone dead `_TEL=$(... get telemetry)` reads -- ONLY when nothing in
+    #    the file still consumes $_TEL (guard against dangling references in copies
+    #    whose analytics block above didn't fully match).
+    if not re.search(r'"\$_TEL"|\$\{_TEL[}:]', c):
+        c = re.sub(r'^[ \t]*_TEL=\$\([^\n]*gstack-config get telemetry[^\n]*\n', '', c, flags=re.MULTILINE)
+    # 7. office-hours self-promo funnel + YC plea
+    if 'office-hours' in path_str:
+        c = strip_oh_promo(c)
+    # 8. collapse empty ```bash``` fences left behind by line-level removals
+    c = re.sub(r'```bash\n(?:[ \t]*\n)*```\n', '', c)
+    return c
+
+import os as _os
+_scan_roots = [GSTACK_DIR]
+_codex_skills_root = Path.home() / '.codex' / 'skills'
+if _codex_skills_root.exists():
+    _scan_roots.append(_codex_skills_root)
+
+_seen = set()
+_swept = 0
+for _root in _scan_roots:
+    for _p in _root.rglob('*.md'):
+        _sp = str(_p)
+        if _p.name != 'SKILL.md' and '/sections/' not in _sp:
+            continue
+        if any(_x in _sp for _x in ('/.git/', '/node_modules/', '/test/', '/docs/', '/dist/')):
+            continue
+        _rp = _os.path.realpath(_sp)
+        if _rp in _seen:
+            continue
+        _seen.add(_rp)
+        _c = _p.read_text(encoding='utf-8')
+        _out = strip_runtime_noise(_c, _sp)
+        if _out != _c:
+            _p.write_text(_out, encoding='utf-8')
+            _swept += 1
+print(f"  swept runtime noise from {_swept} skill/section files (all install copies)", file=sys.stderr)
+
 PYEOF2
 
 python3 "$_TMP2" "$GSTACK_DIR"
@@ -1026,4 +1126,25 @@ if [ -n "$_OH_FILES" ]; then
   fi
 fi
 
-echo "strip-telemetry: done -- telemetry, timeline, learnings, auto update-check, and office-hours self-promo removed"
+# Verify the Phase 4.8 comprehensive sweep: no dead _TEL= reads, no _UPD= auto
+# update-checks, and no stubbed-binary call lines survive in ANY rendered skill
+# or section file across every install copy (main, .agents, .kiro, .factory,
+# ~/.codex). gstack-developer-profile is intentionally excluded (kept).
+_SWEEP_DIRS="$GSTACK_DIR"
+[ -d "$HOME/.codex/skills" ] && _SWEEP_DIRS="$_SWEEP_DIRS $HOME/.codex/skills"
+SWEEP_REMAINING=$(find $_SWEEP_DIRS \
+    \( -name 'SKILL.md' -o -path '*/sections/*.md' \) \
+    ! -path '*/.git/*' ! -path '*/node_modules/*' ! -path '*/test/*' ! -path '*/docs/*' \
+    -print0 2>/dev/null \
+  | xargs -0 grep -InE \
+    -e '_TEL=\$\(.*get telemetry' \
+    -e '_UPD=\$\(.*gstack-update-check' \
+    -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics)' \
+    2>/dev/null || true)
+if [ -n "$SWEEP_REMAINING" ]; then
+  echo "  WARNING: runtime noise still found after Phase 4.8 sweep:" >&2
+  echo "$SWEEP_REMAINING" | head -40 >&2
+  exit 1
+fi
+
+echo "strip-telemetry: done -- telemetry, timeline, learnings, auto update-check, dead _TEL reads, and office-hours self-promo removed (main + .agents + .kiro + .factory + ~/.codex)"
