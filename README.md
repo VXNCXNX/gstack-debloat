@@ -92,7 +92,7 @@ Six phases:
 
 4. **Patch tests** -- Strips telemetry-specific test cases so the suite stays green.
 
-5. **Strip office-hours self-promo** -- Patches `office-hours/SKILL.md.tmpl` (and the regenerated `SKILL.md`, plus `.agents/` and `~/.codex/` copies) to remove the YC apply pitch and the curated "Founder Resources" funnel from Phase 6 of the closing sequence. The skill still produces the design doc and recommends the next planning skill -- it just stops pitching YC.
+5. **Strip office-hours self-promo** -- Patches `office-hours/SKILL.md.tmpl` and the Phase 6 section file `office-hours/sections/design-and-handoff.md.tmpl` (which v1.57+ Reads at runtime instead of inlining), plus the regenerated `.md` renders and the `.agents/` / `~/.codex/` copies. Removes the YC apply pitch, the curated "Founder Resources" funnel, and the "Want me to open these in your browser?" prompt from Phase 6 of the closing sequence. The skill still produces the design doc and recommends the next planning skill -- it just stops pitching YC.
 
 6. **Regenerate and verify** -- Rebuilds all skill files from the patched source, then greps for telemetry/timeline/learnings references, residual `_UPD=` update-check lines, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
 

@@ -546,6 +546,11 @@ def strip_oh_promo(c: str) -> str:
     return c
 
 patch(GSTACK_DIR / 'office-hours/SKILL.md.tmpl', strip_oh_promo)
+# v1.57 moved the office-hours self-promo (YC plea + "Founder Resources" funnel +
+# the "Want me to open these in your browser?" prompt) out of SKILL.md into a
+# Phase 6 section file that SKILL.md tells Claude to Read at runtime. Strip the
+# section source too, or it survives regeneration completely untouched.
+patch(GSTACK_DIR / 'office-hours/sections/design-and-handoff.md.tmpl', strip_oh_promo)
 
 print("  patched generator sources", file=sys.stderr)
 
@@ -724,6 +729,17 @@ if oh.exists():
     c = strip_oh_promo(c)
     if c != orig:
         oh.write_text(c, encoding='utf-8')
+
+# v1.57 Phase 6 self-promo lives in the section file Claude reads at runtime.
+# Re-strip the regenerated section .md (the .tmpl source is patched above, but
+# this guarantees a clean render even if gen:skill-docs doesn't rebuild sections).
+oh_section = GSTACK_DIR / 'office-hours/sections/design-and-handoff.md'
+if oh_section.exists():
+    c = oh_section.read_text(encoding='utf-8')
+    orig = c
+    c = strip_oh_promo(c)
+    if c != orig:
+        oh_section.write_text(c, encoding='utf-8')
 
 # Phase 4.6: strip .agents/ copy
 STUB = '#!/usr/bin/env bash\nexit 0\n'
@@ -990,6 +1006,8 @@ _OH_FILES=""
 for _f in \
   "$GSTACK_DIR/office-hours/SKILL.md" \
   "$GSTACK_DIR/office-hours/SKILL.md.tmpl" \
+  "$GSTACK_DIR/office-hours/sections/design-and-handoff.md" \
+  "$GSTACK_DIR/office-hours/sections/design-and-handoff.md.tmpl" \
   "$GSTACK_DIR/.agents/skills/gstack-office-hours/SKILL.md"
 do
   [ -f "$_f" ] && _OH_FILES="$_OH_FILES $_f"
