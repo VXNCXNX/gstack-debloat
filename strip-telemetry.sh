@@ -9,14 +9,81 @@
 # left intact so manual upgrades still work.
 #
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
-# Compatible with gstack v0.x through v1.43+.
+# Compatible with gstack v0.x through v1.57+.
 #
-# Usage: ./strip-telemetry.sh [GSTACK_DIR]
+# Usage: ./strip-telemetry.sh [--check|--dry-run|--help] [GSTACK_DIR]
 #   GSTACK_DIR defaults to ~/.claude/skills/gstack
+#
+#   (no flag)   patch the install in place (default)
+#   --dry-run   list the files that WOULD be stripped; write nothing
+#   --check     exit 0 if already clean, 1 if any noise remains (CI / pre-commit)
+#   --help      show this help
 # ============================================================================
 set -euo pipefail
 
-GSTACK_DIR="${1:-$HOME/.claude/skills/gstack}"
+MODE="strip"
+GSTACK_DIR=""
+for _arg in "$@"; do
+  case "$_arg" in
+    --help|-h)    MODE="help" ;;
+    --check)      MODE="check" ;;
+    --dry-run|-n) MODE="dry-run" ;;
+    --) ;;
+    --*) echo "strip-telemetry: unknown flag '$_arg' (try --help)" >&2; exit 2 ;;
+    *)  [ -z "$GSTACK_DIR" ] && GSTACK_DIR="$_arg" ;;
+  esac
+done
+GSTACK_DIR="${GSTACK_DIR:-$HOME/.claude/skills/gstack}"
+
+if [ "$MODE" = "help" ]; then
+  sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
+# Shared noise detector (used by --check and --dry-run; writes nothing). Scans
+# every rendered skill + section + template across all install copies for the
+# markers this script strips. gstack-developer-profile is intentionally NOT a
+# marker (kept), nor is the opt-in `gstack-update-check --force`.
+detect_noise() {
+  local _dirs="$GSTACK_DIR"
+  [ -d "$HOME/.codex/skills" ] && _dirs="$_dirs $HOME/.codex/skills"
+  find $_dirs \
+      \( -name 'SKILL.md' -o -name '*.tmpl' -o -path '*/sections/*.md' \) \
+      ! -path '*/.git/*' ! -path '*/node_modules/*' ! -path '*/test/*' ! -path '*/docs/*' \
+      -print0 2>/dev/null \
+    | xargs -0 grep -IlE \
+      -e '_TEL=\$\(.*get telemetry' \
+      -e '_UPD=\$\(.*gstack-update-check' \
+      -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics)' \
+      -e '\.gstack/analytics/.*\.jsonl' \
+      -e 'ycombinator\.com/apply\?ref=gstack' \
+      -e '^### Founder Resources \(all tiers\)' \
+      2>/dev/null || true
+}
+
+if [ "$MODE" = "check" ]; then
+  _hits=$(detect_noise)
+  if [ -n "$_hits" ]; then
+    echo "strip-telemetry: NOISE PRESENT in $(printf '%s\n' "$_hits" | wc -l | tr -d ' ') file(s):" >&2
+    printf '%s\n' "$_hits" >&2
+    exit 1
+  fi
+  echo "strip-telemetry: clean -- no telemetry/update-check/promo markers found"
+  exit 0
+fi
+
+if [ "$MODE" = "dry-run" ]; then
+  _hits=$(detect_noise)
+  if [ -z "$_hits" ]; then
+    echo "strip-telemetry: already clean -- nothing to strip at $GSTACK_DIR"
+    exit 0
+  fi
+  echo "strip-telemetry: DRY RUN -- would strip $(printf '%s\n' "$_hits" | wc -l | tr -d ' ') file(s) under $GSTACK_DIR:"
+  printf '%s\n' "$_hits"
+  echo ""
+  echo "Run without --dry-run to apply. (regeneration may also touch generated SKILL.md files)"
+  exit 0
+fi
 
 if [ ! -f "$GSTACK_DIR/scripts/resolvers/preamble.ts" ] && \
    [ ! -f "$GSTACK_DIR/scripts/resolvers/preamble/generate-preamble-bash.ts" ]; then
@@ -1018,9 +1085,11 @@ if _codex_skills_root.exists():
 _seen = set()
 _swept = 0
 for _root in _scan_roots:
-    for _p in _root.rglob('*.md'):
+    for _p in list(_root.rglob('*.md')) + list(_root.rglob('*.tmpl')):
         _sp = str(_p)
-        if _p.name != 'SKILL.md' and '/sections/' not in _sp:
+        # rendered skills + section files, AND their source templates (so a later
+        # regeneration stays clean and --check has nothing to flag at source).
+        if not (_p.name in ('SKILL.md', 'SKILL.md.tmpl') or '/sections/' in _sp):
             continue
         if any(_x in _sp for _x in ('/.git/', '/node_modules/', '/test/', '/docs/', '/dist/')):
             continue
@@ -1033,7 +1102,7 @@ for _root in _scan_roots:
         if _out != _c:
             _p.write_text(_out, encoding='utf-8')
             _swept += 1
-print(f"  swept runtime noise from {_swept} skill/section files (all install copies)", file=sys.stderr)
+print(f"  swept runtime noise from {_swept} skill/section/template files (all install copies)", file=sys.stderr)
 
 PYEOF2
 
@@ -1133,7 +1202,7 @@ fi
 _SWEEP_DIRS="$GSTACK_DIR"
 [ -d "$HOME/.codex/skills" ] && _SWEEP_DIRS="$_SWEEP_DIRS $HOME/.codex/skills"
 SWEEP_REMAINING=$(find $_SWEEP_DIRS \
-    \( -name 'SKILL.md' -o -path '*/sections/*.md' \) \
+    \( -name 'SKILL.md' -o -name 'SKILL.md.tmpl' -o -path '*/sections/*.md' -o -path '*/sections/*.tmpl' \) \
     ! -path '*/.git/*' ! -path '*/node_modules/*' ! -path '*/test/*' ! -path '*/docs/*' \
     -print0 2>/dev/null \
   | xargs -0 grep -InE \

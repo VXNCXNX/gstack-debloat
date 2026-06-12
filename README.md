@@ -10,6 +10,34 @@ Remote telemetry is only one layer. gstack also writes local analytics, session 
 
 ---
 
+## Before / after
+
+What a skill preamble runs on **every** invocation, before vs after:
+
+```diff
+  ## Preamble (run first)
+  ```bash
+- _UPD=$(~/.claude/skills/gstack/bin/gstack-update-check 2>/dev/null || ...)   # network call
+- [ -n "$_UPD" ] && echo "$_UPD" || true
+- _TEL=$(~/.claude/skills/gstack/bin/gstack-config get telemetry || echo off) # dead read
+- _SESSION_ID=...; echo "TELEMETRY: ..."                                       # session tracking
+  mkdir -p ~/.gstack/sessions
+  ...
+```
+
+And the `/office-hours` closing sequence:
+
+```diff
+- A personal note from me, Garry Tan, the creator of GStack: ... apply to Y Combinator?
+- ### Founder Resources (all tiers)   # 34-link YC/Lightcone/PG funnel
+- "Want me to open any of these in your browser?"
+  ### Next-skill recommendations      # the actual useful part, kept
+```
+
+Run `--check` to see whether your install still has any of it.
+
+---
+
 ## What gets removed
 
 | Component | What it does | Gone |
@@ -63,6 +91,21 @@ Custom gstack location:
 
 ```bash
 ~/.gstack/strip-telemetry.sh /path/to/your/gstack
+```
+
+### Preview & verify
+
+```bash
+~/.gstack/strip-telemetry.sh --dry-run   # list files that WOULD be stripped; writes nothing
+~/.gstack/strip-telemetry.sh --check     # exit 0 if clean, 1 if any noise remains
+~/.gstack/strip-telemetry.sh --help
+```
+
+`--check` writes nothing and is CI / pre-commit friendly, drop it in a hook to fail
+the moment a gstack upgrade reintroduces telemetry:
+
+```bash
+~/.gstack/strip-telemetry.sh --check || ~/.gstack/strip-telemetry.sh
 ```
 
 ### Automatic (recommended)
