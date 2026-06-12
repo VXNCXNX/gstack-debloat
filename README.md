@@ -1,6 +1,6 @@
 # gstack-debloat
 
-**gstack is the best skills framework for AI coding agents.** It makes Claude Code and Codex dramatically more capable. The QA testing, code review, shipping workflows, design audits... genuinely great software.
+gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
 
 It also ships with a pile of stuff you didn't ask for: telemetry, an auto update-check that fires on **every** skill invocation, dead `gstack-config` reads in half the skills, and an `/office-hours` closing sequence that ends in a YC apply pitch plus a curated funnel of YC/Lightcone/Paul Graham resources with a "want me to open these in your browser?" prompt.
 
