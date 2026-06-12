@@ -2,9 +2,11 @@
 # ============================================================================
 # strip-telemetry.sh -- Remove telemetry and local session memory from gstack
 #
-# gstack (https://github.com/garrytan/gstack) ships with built-in telemetry and
-# local session-intelligence persistence. This script strips both cleanly after
-# every install or upgrade.
+# gstack (https://github.com/garrytan/gstack) ships with built-in telemetry,
+# local session-intelligence persistence, and a per-preamble auto update-check
+# that fires on every skill invocation. This script strips all three cleanly
+# after every install or upgrade. The opt-in `/gstack-upgrade --force` check is
+# left intact so manual upgrades still work.
 #
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
 # Compatible with gstack v0.x through v1.43+.
@@ -135,6 +137,13 @@ def patch_preamble_monolith(c: str) -> str:
         'available]." Keep it to 2-3 sentences.',
     )
     c = c.replace('T1: core + upgrade + lake + telemetry + voice', 'T1: core + upgrade + lake + proactive + voice')
+    # Strip the per-preamble auto update-check (legacy monolith form). Tolerant
+    # match: only touches the _UPD= update-check lines, never the opt-in upgrade.
+    c = re.sub(
+        r'_UPD=\$\([^\n]*gstack-update-check[^\n]*\n'
+        r'(?:\[ -n "\$_UPD" \] && echo "\$_UPD" \|\| true\n)?',
+        '', c,
+    )
     return c
 
 preamble_mono = GSTACK_DIR / 'scripts/resolvers/preamble.ts'
@@ -165,6 +174,16 @@ if preamble_bash.exists():
         c = re.sub(r'# zsh-compatible.*?^done\n', '', c, flags=re.DOTALL | re.MULTILINE)
         c = re.sub(r'# Learnings count\n.*?echo "LEARNINGS: 0"\nfi\n', '', c, flags=re.DOTALL)
         c = re.sub(r'# Session timeline: record skill start.*?2>/dev/null &\n', '', c, flags=re.DOTALL)
+        # Strip the per-preamble auto update-check. It runs gstack-update-check on
+        # every skill invocation and echoes the result -- pure token waste for a
+        # fork that opts out of upstream auto-updates. Preserve the ${runtimeRoot}
+        # prefix that defines GSTACK_BIN etc. The opt-in `/gstack-upgrade --force`
+        # check (no _UPD=) is intentionally left intact.
+        c = re.sub(
+            r'(\$\{runtimeRoot\})?_UPD=\$\([^\n]*gstack-update-check[^\n]*\n'
+            r'(?:\[ -n "\$_UPD" \] && echo "\$_UPD" \|\| true\n)?',
+            lambda m: m.group(1) or '', c,
+        )
         return c
     patch(preamble_bash, _patch_bash)
 
@@ -663,6 +682,20 @@ for _p in [
 ]:
     strip_skill_usage(_p)
 
+# Strip the per-preamble auto update-check from every regenerated main SKILL.md.
+# The generator source is patched too, but this guarantees a clean render even if
+# a future generator shape slips past the source regex. Matches only the _UPD=
+# auto-check lines, so /gstack-upgrade's opt-in `--force` check stays intact.
+for _p in [GSTACK_DIR / 'SKILL.md'] + sorted(GSTACK_DIR.glob('*/SKILL.md')):
+    if not _p.exists():
+        continue
+    c = _p.read_text(encoding='utf-8')
+    orig = c
+    c = re.sub(r'^_UPD=\$\([^\n]*gstack-update-check[^\n]*\n', '', c, flags=re.MULTILINE)
+    c = re.sub(r'^\[ -n "\$_UPD" \] && echo "\$_UPD" \|\| true\n', '', c, flags=re.MULTILINE)
+    if c != orig:
+        _p.write_text(c, encoding='utf-8')
+
 # retro: re-strip Eureka Moments paragraph after regeneration
 retro_md = GSTACK_DIR / 'retro/SKILL.md'
 if retro_md.exists():
@@ -754,6 +787,9 @@ if agents_base.exists():
             c = re.sub(r'[ \t]*~[^\n]*gstack-learnings-log[^\n]*\n', '', c)
             c = re.sub(r'[ \t]*~[^\n]*gstack-learnings-search[^\n]*\n', '', c)
             c = re.sub(r'[^\n]*timeline\.jsonl[^\n]*\n', '', c)
+            # per-preamble auto update-check (leave /gstack-upgrade --force alone)
+            c = re.sub(r'[^\n]*_UPD=\$\([^\n]*gstack-update-check[^\n]*\n', '', c)
+            c = re.sub(r'\[ -n "\$_UPD" \] && echo "\$_UPD" \|\| true\n', '', c)
             if 'office-hours' in str(p):
                 c = strip_oh_promo(c)
             if c != orig:
@@ -873,6 +909,9 @@ if codex_skills.exists():
             c = re.sub(r'[^\n]*eureka\.jsonl[^\n]*\n', '', c)
             c = re.sub(r'[^\n]*spec-review\.jsonl[^\n]*\n', '', c)
             c = re.sub(r'[^\n]*skill-usage\.jsonl[^\n]*\n', '', c)
+            # per-preamble auto update-check (leave /gstack-upgrade --force alone)
+            c = re.sub(r'[^\n]*_UPD=\$\([^\n]*gstack-update-check[^\n]*\n', '', c)
+            c = re.sub(r'\[ -n "\$_UPD" \] && echo "\$_UPD" \|\| true\n', '', c)
             if 'office-hours' in str(p):
                 c = strip_oh_promo(c)
             if c != orig:
@@ -919,6 +958,7 @@ REMAINING=$(grep -RIn \
   -e 'learnings.jsonl' \
   -e 'eureka.jsonl' \
   -e 'spec-review.jsonl' \
+  -e '_UPD=' \
   "$GSTACK_DIR"/*/SKILL.md \
   ${_SOURCES} \
   2>/dev/null || true)
@@ -933,6 +973,7 @@ if [ -d "$_AGENTS_DIR" ]; then
     -e 'timeline.jsonl' \
     -e 'learnings.jsonl' \
     -e 'skill-usage.jsonl' \
+    -e '_UPD=' \
     "$_AGENTS_DIR"/*/SKILL.md \
     2>/dev/null || true)
   REMAINING="$REMAINING$_AGENTS_REMAINING"
@@ -967,4 +1008,4 @@ if [ -n "$_OH_FILES" ]; then
   fi
 fi
 
-echo "strip-telemetry: done -- telemetry, timeline, learnings, and office-hours self-promo removed"
+echo "strip-telemetry: done -- telemetry, timeline, learnings, auto update-check, and office-hours self-promo removed"

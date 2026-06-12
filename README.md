@@ -8,7 +8,7 @@ Remote telemetry is only one layer. gstack also writes local analytics, session 
 
 **Privacy is not a feature request. It's a requirement. And neither is the YC apply funnel.**
 
-This script removes telemetry, the separate timeline/learnings persistence layer, and the `/office-hours` self-promotion block from gstack. Cleanly, completely, and automatically after every update.
+This script removes telemetry, the separate timeline/learnings persistence layer, the per-preamble auto update-check, and the `/office-hours` self-promotion block from gstack. Cleanly, completely, and automatically after every update.
 
 ---
 
@@ -32,13 +32,14 @@ This script removes telemetry, the separate timeline/learnings persistence layer
 | `{{LEARNINGS_SEARCH}}` / `{{LEARNINGS_LOG}}` | Generated skill-doc injections for learnings | Removed |
 | `### Refresh learnings` sections | Hardcoded mid-skill learnings re-pull blocks in `investigate` / `qa` / `ship` templates (v1.43+) | Removed |
 | Telemetry test assertions | Tests that would fail after stripping | Removed |
+| `_UPD=$(gstack-update-check ...)` preamble check | Auto update-check that runs on **every** skill invocation (network call + echoed output = token waste) | Removed |
 | `/office-hours` "Garry's Personal Plea" | YC apply pitch (3 sub-tiers) + `ycombinator.com/apply?ref=gstack` | Removed |
 | `/office-hours` "Founder Resources (all tiers)" | 34-item curated YC / Lightcone / Paul Graham funnel + open-in-browser flow | Removed |
 | `/office-hours` `Then proceed to Founder Resources below.` stitches | Cross-tier handoff lines into the resource funnel | Removed |
 
-After patching, the script regenerates all 50+ `SKILL.md` files and verifies that telemetry, timeline, learnings, and office-hours self-promo references are gone from generated skills.
+After patching, the script regenerates all 50+ `SKILL.md` files and verifies that telemetry, timeline, learnings, auto update-check, and office-hours self-promo references are gone from generated skills.
 
-**What stays:** Everything that makes gstack useful. Update checks, skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. Nothing user-facing is removed except persisted memory features.
+**What stays:** Everything that makes gstack useful. Skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. The opt-in `/gstack-upgrade --force` check stays too, so you can still upgrade manually when you choose. Only the *automatic* per-preamble update-check is removed. Nothing user-facing is removed except persisted memory features and the auto update-check.
 
 ---
 
@@ -83,7 +84,7 @@ The script is **idempotent**. Run it once, run it ten times. If telemetry is alr
 
 Six phases:
 
-1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` to remove telemetry variables, timeline startup logging, learnings injection, and timeline-based context recovery. Fixes the proactive prompt dependency chain that was gated on telemetry state.
+1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` (and the v1.6+ `generate-preamble-bash.ts` sub-module) to remove telemetry variables, timeline startup logging, learnings injection, timeline-based context recovery, and the per-preamble auto update-check. Fixes the proactive prompt dependency chain that was gated on telemetry state.
 
 2. **Patch custom sources** -- Removes the custom learnings write-paths that live outside the generic resolver flow, including the `review` template and the hardcoded `### Refresh learnings` re-pull sections in the `investigate`, `qa`, and `ship` templates (added in gstack v1.43).
 
@@ -93,7 +94,7 @@ Six phases:
 
 5. **Strip office-hours self-promo** -- Patches `office-hours/SKILL.md.tmpl` (and the regenerated `SKILL.md`, plus `.agents/` and `~/.codex/` copies) to remove the YC apply pitch and the curated "Founder Resources" funnel from Phase 6 of the closing sequence. The skill still produces the design doc and recommends the next planning skill -- it just stops pitching YC.
 
-6. **Regenerate and verify** -- Rebuilds all skill files from the patched source, then greps for telemetry/timeline/learnings references and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
+6. **Regenerate and verify** -- Rebuilds all skill files from the patched source, then greps for telemetry/timeline/learnings references, residual `_UPD=` update-check lines, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
 
 ### Requirements
 
@@ -123,7 +124,7 @@ Because `gstack-config set telemetry off` only disables the **remote** binary. T
 No. Core gstack workflows still work. The script removes telemetry and persisted local memory features. The main behavioral change is that timeline/history/learnings-based context recovery no longer exists, by design.
 
 **Will gstack updates re-add this stuff?**
-Yes. Upstream updates can reintroduce telemetry, timeline logging, and learnings persistence. That is why the CLAUDE.md instruction exists.
+Yes. Upstream updates can reintroduce telemetry, timeline logging, learnings persistence, and the auto update-check. That is why the CLAUDE.md instruction exists.
 
 **Does this work with vendored/local installs?**
 Yes. Pass the install path as an argument: `~/.gstack/strip-telemetry.sh ./path/to/gstack`
