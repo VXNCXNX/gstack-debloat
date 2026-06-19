@@ -11,32 +11,136 @@
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
 # Compatible with gstack v0.x through v1.57+.
 #
-# Usage: ./strip-telemetry.sh [--check|--dry-run|--help] [GSTACK_DIR]
+# Usage: ./strip-telemetry.sh [FLAGS] [GSTACK_DIR]
 #   GSTACK_DIR defaults to ~/.claude/skills/gstack
 #
-#   (no flag)   patch the install in place (default)
-#   --dry-run   list the files that WOULD be stripped; write nothing
-#   --check     exit 0 if already clean, 1 if any noise remains (CI / pre-commit)
-#   --help      show this help
+#   (no flag)        patch the install in place (default)
+#   --dry-run        list the files that WOULD be stripped; write nothing
+#   --check          exit 0 if already clean, 1 if any noise remains (CI / pre-commit)
+#   --help           show this help
+#
+#   Minimal skill install (prune unused skills to cut context + disk):
+#   --minimal        also prune gstack to a curated keep-set, removing every
+#                    other skill from all install copies (repo, .agents, host
+#                    dirs, ~/.codex, ~/.agents/skills). Implies a strip pass.
+#   --keep "a,b,c"   keep exactly these skills (comma/space list); overrides
+#                    the built-in minimal set. Implies --minimal.
+#   --keep-file PATH keep set from a file (one skill per line). Implies --minimal.
+#   --list-skills    print the skill catalog with keep/STRIP status; no changes
+#
+#   Pruned skills are uncommitted git deletions in the repo copy, so a gstack
+#   update (git reset/checkout) restores them -- re-run with --minimal after
+#   each update, exactly like the telemetry strip.
 # ============================================================================
 set -euo pipefail
 
 MODE="strip"
 GSTACK_DIR=""
-for _arg in "$@"; do
-  case "$_arg" in
-    --help|-h)    MODE="help" ;;
-    --check)      MODE="check" ;;
-    --dry-run|-n) MODE="dry-run" ;;
+DO_MINIMAL=0
+KEEP_LIST=""   # explicit keep override (space-separated); empty => MINIMAL_KEEP
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help|-h)     MODE="help" ;;
+    --check)       MODE="check" ;;
+    --dry-run|-n)  MODE="dry-run" ;;
+    --list-skills) MODE="list-skills" ;;
+    --minimal)     DO_MINIMAL=1 ;;
+    --keep)        DO_MINIMAL=1; KEEP_LIST="$KEEP_LIST $(printf '%s' "${2:-}" | tr ',' ' ')"; shift ;;
+    --keep=*)      DO_MINIMAL=1; KEEP_LIST="$KEEP_LIST $(printf '%s' "${1#--keep=}" | tr ',' ' ')" ;;
+    --keep-file)   DO_MINIMAL=1; KEEP_LIST="$KEEP_LIST $(tr ',\n' '  ' < "${2:?--keep-file needs a path}")"; shift ;;
+    --keep-file=*) DO_MINIMAL=1; KEEP_LIST="$KEEP_LIST $(tr ',\n' '  ' < "${1#--keep-file=}")" ;;
     --) ;;
-    --*) echo "strip-telemetry: unknown flag '$_arg' (try --help)" >&2; exit 2 ;;
-    *)  [ -z "$GSTACK_DIR" ] && GSTACK_DIR="$_arg" ;;
+    --*) echo "strip-telemetry: unknown flag '$1' (try --help)" >&2; exit 2 ;;
+    *)  [ -z "$GSTACK_DIR" ] && GSTACK_DIR="$1" ;;
   esac
+  shift
 done
 GSTACK_DIR="${GSTACK_DIR:-$HOME/.claude/skills/gstack}"
 
+# ── Minimal skill install (prune) ───────────────────────────────────────────
+# Curated default keep-set used by --minimal when no --keep override is given.
+MINIMAL_KEEP="autoplan benchmark browse canary codex cso design-consultation \
+design-html design-review design-shotgun investigate office-hours plan-ceo-review \
+plan-design-review plan-eng-review plan-tune qa retro review spec setup-browser-cookies"
+# Always retained regardless of keep set: gstack core + the command shim.
+ALWAYS_KEEP="gstack _gstack-command"
+
+# Remove a path, preferring the user's Trash when available (recoverable),
+# else rm -rf. Repo-copy deletions are also recoverable via git.
+_rm_path() {
+  if command -v trash >/dev/null 2>&1; then trash "$1" 2>/dev/null || rm -rf "$1"
+  else rm -rf "$1"; fi
+}
+
+_skill_catalog() {  # bare skill names = immediate $GSTACK_DIR subdirs with a SKILL.md
+  local _d _n
+  for _d in "$GSTACK_DIR"/*/; do
+    _n=$(basename "$_d")
+    [ -f "$_d/SKILL.md" ] && printf '%s\n' "$_n"
+  done | sort -u
+}
+
+_effective_keep() {  # keep override (else MINIMAL_KEEP) + ALWAYS_KEEP, sorted unique
+  local _k; _k=$(printf '%s' "${KEEP_LIST:-}" | tr -s ' ')
+  [ -z "$(printf '%s' "$_k" | tr -d ' ')" ] && _k="$MINIMAL_KEEP"
+  printf '%s %s\n' "$_k" "$ALWAYS_KEEP" | tr ' ' '\n' | sed '/^$/d' | sort -u
+}
+
+_prune_targets() {  # every on-disk path for stripped skill <name>, one per line
+  local _n="$1" _h
+  printf '%s\n' "$GSTACK_DIR/$_n"
+  for _h in .agents .cursor .factory .opencode .kiro .hermes .slate .openclaw .gbrain; do
+    printf '%s\n' "$GSTACK_DIR/$_h/skills/gstack-$_n"
+  done
+  printf '%s\n' "$HOME/.codex/skills/gstack-$_n"
+  printf '%s\n' "$HOME/.codex/skills/gstack/$_n"
+  printf '%s\n' "$HOME/.agents/skills/gstack-$_n"
+}
+
+list_skills() {
+  local _keep _name _tag _src
+  _keep=" $(_effective_keep | tr '\n' ' ') "
+  [ -n "$(printf '%s' "${KEEP_LIST:-}" | tr -d ' ')" ] && _src=custom || _src=MINIMAL_KEEP
+  echo "gstack skills: $(_skill_catalog | wc -l | tr -d ' ') in catalog  (keep=$_src)"
+  while IFS= read -r _name; do
+    case "$_keep" in *" $_name "*) _tag="keep " ;; *) _tag="STRIP" ;; esac
+    printf '  [%s] %s\n' "$_tag" "$_name"
+  done < <(_skill_catalog)
+}
+
+prune_skills() {  # $1 = "apply" | "dry"
+  local _apply="$1" _keep _strip _name _p _removed=0 _n
+  _keep=$(_effective_keep)
+  _strip=$(comm -23 <(_skill_catalog) <(printf '%s\n' "$_keep"))
+  if [ -z "$_strip" ]; then
+    echo "strip-telemetry[minimal]: nothing to prune -- already at keep set"
+    return 0
+  fi
+  _n=$(printf '%s\n' "$_strip" | wc -l | tr -d ' ')
+  if [ "$_apply" = "dry" ]; then
+    echo "strip-telemetry[minimal]: DRY RUN -- would prune $_n skill(s):"
+    printf '  %s\n' $_strip
+    return 0
+  fi
+  echo "strip-telemetry[minimal]: pruning $_n skill(s) to minimal set ..."
+  while IFS= read -r _name; do
+    [ -z "$_name" ] && continue
+    while IFS= read -r _p; do
+      { [ -e "$_p" ] || [ -L "$_p" ]; } || continue
+      _rm_path "$_p"; _removed=$((_removed+1))
+    done < <(_prune_targets "$_name")
+  done <<< "$_strip"
+  echo "strip-telemetry[minimal]: pruned $_n skill(s), $_removed path(s) removed (all install copies)"
+  echo "strip-telemetry[minimal]: note -- gstack/llms.txt + the main SKILL.md skill list may still mention pruned names (cosmetic; dirs are gone)"
+}
+
 if [ "$MODE" = "help" ]; then
-  sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR<3{next} /^# ={5,}/{exit} {sub(/^# ?/,""); print}' "$0"
+  exit 0
+fi
+
+if [ "$MODE" = "list-skills" ]; then
+  list_skills
   exit 0
 fi
 
@@ -74,14 +178,18 @@ fi
 
 if [ "$MODE" = "dry-run" ]; then
   _hits=$(detect_noise)
-  if [ -z "$_hits" ]; then
-    echo "strip-telemetry: already clean -- nothing to strip at $GSTACK_DIR"
-    exit 0
+  if [ -n "$_hits" ]; then
+    echo "strip-telemetry: DRY RUN -- would strip $(printf '%s\n' "$_hits" | wc -l | tr -d ' ') file(s) under $GSTACK_DIR:"
+    printf '%s\n' "$_hits"
+    echo ""
+    echo "Run without --dry-run to apply. (regeneration may also touch generated SKILL.md files)"
+  else
+    echo "strip-telemetry: already clean -- no telemetry to strip at $GSTACK_DIR"
   fi
-  echo "strip-telemetry: DRY RUN -- would strip $(printf '%s\n' "$_hits" | wc -l | tr -d ' ') file(s) under $GSTACK_DIR:"
-  printf '%s\n' "$_hits"
-  echo ""
-  echo "Run without --dry-run to apply. (regeneration may also touch generated SKILL.md files)"
+  if [ "$DO_MINIMAL" = "1" ]; then
+    echo ""
+    prune_skills dry
+  fi
   exit 0
 fi
 
@@ -1228,3 +1336,8 @@ if [ -n "$SWEEP_REMAINING" ]; then
 fi
 
 echo "strip-telemetry: done -- telemetry, timeline, learnings, auto update-check, dead _TEL reads, and office-hours self-promo removed (main + .agents + .kiro + .factory + ~/.codex)"
+
+# ── Minimal skill prune (runs after the telemetry strip when requested) ──────
+if [ "$DO_MINIMAL" = "1" ]; then
+  prune_skills apply
+fi
