@@ -422,6 +422,23 @@ if search_building.exists():
         )
     patch(search_building, _patch_search)
 
+# v1.58+: first-run guidance injects a gstack-telemetry-log call
+# (first_task_scaffold_shown) into every skill preamble. Keep the .activated
+# lifecycle markers (harmless local touch files), drop only the telemetry line.
+first_run = GSTACK_DIR / 'scripts/resolvers/preamble/generate-first-run-guidance.ts'
+if first_run.exists():
+    def _patch_first_run(c):
+        c = re.sub(
+            r'\$\{ctx\.paths\.binDir\}/gstack-telemetry-log --event-type first_task_scaffold_shown[^\n]*\n',
+            '', c,
+        )
+        c = c.replace(
+            'Then substitute the token you saw for TASK_TOKEN and run (best-effort), and mark activated:',
+            'Then mark activated:',
+        )
+        return c
+    patch(first_run, _patch_first_run)
+
 # ─── Phase 1c: shared resolvers + skill-specific ─────────────────────────────
 
 learnings = GSTACK_DIR / 'scripts/resolvers/learnings.ts'

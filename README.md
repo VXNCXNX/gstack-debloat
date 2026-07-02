@@ -1,7 +1,7 @@
 # gstack-debloat
 
 [![ci](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml/badge.svg)](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml)
-[![tested against gstack v1.57](https://img.shields.io/badge/tested-gstack%20v1.57-blue)](https://github.com/garrytan/gstack)
+[![tested against gstack v1.58](https://img.shields.io/badge/tested-gstack%20v1.58-blue)](https://github.com/garrytan/gstack)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
@@ -151,7 +151,7 @@ Seven phases:
 
 ### Compatibility
 
-Tested through gstack **v1.57.10.0**. The script is version-tolerant: each phase
+Tested through gstack **v1.58.5.0**. The script is version-tolerant: each phase
 matches its patterns idempotently and skips cleanly when a pattern is absent, so
 it keeps working across gstack releases. New persistence surfaces introduced
 upstream are added phase by phase as they appear.
