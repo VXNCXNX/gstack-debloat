@@ -8,8 +8,11 @@
 # after every install or upgrade. The opt-in `/gstack-upgrade --force` check is
 # left intact so manual upgrades still work.
 #
+# The strip pass also regenerates the gitignored .agents/skills/ copies that
+# Pi and Codex read, since `git pull` cannot refresh them.
+#
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
-# Compatible with gstack v0.x through v1.57+.
+# Compatible with gstack v0.x through v1.60+.
 #
 # Usage: ./strip-telemetry.sh [FLAGS] [GSTACK_DIR]
 #   GSTACK_DIR defaults to ~/.claude/skills/gstack
@@ -831,6 +834,16 @@ python3 "$_TMP" "$GSTACK_DIR"
 echo "  regenerating SKILL.md files..."
 (cd "$GSTACK_DIR" && bun run gen:skill-docs >/dev/null)
 echo "  regenerated all SKILL.md files"
+
+# .agents/skills/ holds the codex-format copies that Pi/Codex read via
+# ~/.agents/skills/gstack-* symlinks. It is gitignored, so `git pull` never
+# refreshes it: without this pass Phase 4.6 strips stale content in place and
+# the codex hosts keep serving the previous release's SKILL.md.
+if [ -d "$GSTACK_DIR/.agents/skills" ]; then
+  echo "  regenerating .agents/ codex-format SKILL.md files..."
+  (cd "$GSTACK_DIR" && bun run gen:skill-docs --host codex >/dev/null)
+  echo "  regenerated .agents/ copy"
+fi
 
 # -- 4.5. Write Phase 4.5+4.6 Python patcher to temp file --------------------
 _TMP2=$(mktemp /tmp/gstack_strip2_XXXXXX.py 2>/dev/null || mktemp)
