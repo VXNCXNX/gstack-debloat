@@ -918,6 +918,47 @@ if skill_start.exists():
         return c
     patch(skill_start, _patch_skill_start)
 
+# Skill-END artifacts sync. Through v1.70 this was its own fence under
+# "## Artifacts Sync", which this script never touched. v1.71 folded it into
+# gstack-skill-end -- inside the "## Telemetry (run last)" section Phase 1b
+# deletes -- so stripping telemetry silently took the sync with it.
+# `--discover-new` (scan the allowlist, enqueue changed files) has NO other
+# caller: skill-start runs only `--once`, which drains a queue nothing fills,
+# and it runs BEFORE the skill produces its artifacts anyway. Left as-is, a
+# user with artifacts_sync_mode on would silently stop syncing.
+# Restore it as its own fence, the way upstream shipped it for years. Both
+# calls self-gate on artifacts_sync_mode (subcmd_discover_new exits 0 when
+# sync is off), so this is a no-op for users who never enabled sync.
+brain_sync_block = GSTACK_DIR / 'scripts/resolvers/preamble/generate-brain-sync-block.ts'
+if brain_sync_block.exists():
+    def _patch_brain_sync(c):
+        if 'gstack-brain-sync --discover-new' in c:
+            return c
+        c = c.replace(
+            " * Skill-END sync is no longer a separate fence: `bin/gstack-skill-end`\n"
+            " * (invoked by the Telemetry step) drains the queue before logging.\n",
+            " * Skill-END sync is a separate fence again (gstack-debloat): the Telemetry\n"
+            " * step that invoked `bin/gstack-skill-end` is stripped, and that binary was\n"
+            " * v1.71's only caller of `--discover-new`. Without the fence below, the\n"
+            " * artifacts a skill just produced are never enqueued, so they never sync.\n",
+        )
+        # `\`` = an escaped backtick inside the generator's template literal.
+        _F = '\\`\\`\\`'
+        _anchor = 'exactly as the block instructs.`;'
+        if _anchor in c:
+            c = c.replace(_anchor,
+                'exactly as the block instructs.\n'
+                '\n'
+                'At skill END, drain the artifacts queue (no-op when sync is off):\n'
+                '\n'
+                + _F + 'bash\n'
+                '${ctx.paths.binDir}/gstack-brain-sync --discover-new 2>/dev/null || true\n'
+                '${ctx.paths.binDir}/gstack-brain-sync --once 2>/dev/null || true\n'
+                + _F + '`;',
+            )
+        return c
+    patch(brain_sync_block, _patch_brain_sync)
+
 # generate-preamble-bash.ts: the fence prose tells the model to carry SESSION_ID
 # and TEL_START to "the Telemetry step" -- a step Phase 1b just deleted. Drop the
 # dangling instruction rather than leave the model hunting for it.

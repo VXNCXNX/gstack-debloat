@@ -67,6 +67,7 @@ while every JSONL append still fires.
 | Telemetry test assertions | Tests that would fail after stripping | Removed |
 | `bin/gstack-skill-start` noise | v1.71 moved the inline preamble bash into this script: the analytics append, the `.pending-*` drain, the learnings pull, the timeline write, the telemetry consent prompt, and the per-run update-check all live here now | Stripped in place (the script keeps emitting its STATUS lines) |
 | `gstack-skill-end` | v1.71's whole "Telemetry (run last)" epilogue in one binary — duration + outcome analytics, timeline write, remote hand-off | Neutralized |
+| skill-end artifacts sync | **Kept.** v1.71 folded the artifacts-sync drain into `gstack-skill-end`, so removing telemetry would have taken it with it. `--discover-new` has no other caller, so artifacts a skill produced would never be enqueued. Restored as its own fence, the way upstream shipped it through v1.70 | Kept |
 | `## Operational Self-Improvement` | v1.71 made the learnings write unconditional ("this step ALWAYS runs") in every skill's completion protocol | Removed |
 | `- Telemetry (run last)` skip-list rows | `composition.ts` + `autoplan` list a section that no longer exists | Removed |
 | `_UPD=$(gstack-update-check ...)` preamble check | Auto update-check that runs on **every** skill invocation (network call + echoed output = token waste) | Removed |
