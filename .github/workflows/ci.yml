@@ -43,9 +43,14 @@ jobs:
       - name: Check — still clean after second strip
         run: ./strip-telemetry.sh --check "$RUNNER_TEMP/gstack"
 
-      - name: Regenerate skills from patched sources
+      # --host all, not the bare default: it proves the patched sources render
+      # clean for EVERY host (claude, codex/.agents, kiro, factory, ...), and it
+      # materializes the host copies gstack's own suite reads. A fresh clone
+      # ships none of them (they are gitignored), and the strip only refreshes
+      # .agents when the user already has that host installed.
+      - name: Regenerate skills from patched sources (every host)
         working-directory: ${{ runner.temp }}/gstack
-        run: bun run gen:skill-docs
+        run: bun run gen:skill-docs --host all
 
       - name: Check — STILL clean after regeneration (sources are patched, not just output)
         run: ./strip-telemetry.sh --check "$RUNNER_TEMP/gstack"
