@@ -38,7 +38,10 @@ And the `/office-hours` closing sequence:
   ### Next-skill recommendations      # the actual useful part, kept
 ```
 
-Run `--check` to see whether your install still has any of it.
+Run `--check` to see whether your install still has any of it. Since v1.71 that
+means scanning the runtime scripts too, not just the rendered skills: upstream
+moved the writes into `bin/gstack-skill-start`, so a render can look spotless
+while every JSONL append still fires.
 
 ---
 

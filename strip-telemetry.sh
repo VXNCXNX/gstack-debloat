@@ -161,11 +161,45 @@ detect_noise() {
     | xargs -0 grep -IlE \
       -e '_TEL=\$\(.*get telemetry' \
       -e '_UPD=\$\(.*gstack-update-check' \
-      -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics)' \
+      -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics|skill-end)' \
       -e '\.gstack/analytics/.*\.jsonl' \
+      -e '^## Telemetry \(run last\)' \
+      -e '^## Operational Self-Improvement' \
       -e 'ycombinator\.com/apply\?ref=gstack' \
       -e '^### Founder Resources \(all tiers\)' \
       2>/dev/null || true
+
+  # v1.71+ moved the noise OUT of the renders and into runtime scripts and
+  # generator sources -- neither of which matches the render globs above. Left
+  # unscanned, --check would green-light a completely unstripped install (the
+  # renders look clean because the writes happen elsewhere now). Scan the
+  # specific files the strip owns; a whole-bin/ sweep would false-positive on
+  # the legitimate callers of the stubbed binaries.
+  local _srcs="" _f
+  for _f in \
+    "$GSTACK_DIR/bin/gstack-skill-start" \
+    "$GSTACK_DIR/bin/gstack-skill-end" \
+    "$GSTACK_DIR/scripts/resolvers/preamble.ts" \
+    "$GSTACK_DIR/scripts/resolvers/preamble/generate-preamble-bash.ts" \
+    "$GSTACK_DIR/scripts/resolvers/preamble/generate-completion-status.ts" \
+    "$GSTACK_DIR/scripts/resolvers/preamble/generate-context-recovery.ts" \
+    "$GSTACK_DIR/scripts/resolvers/preamble/generate-search-before-building.ts" \
+    "$GSTACK_DIR/scripts/resolvers/composition.ts" \
+    "$GSTACK_DIR/scripts/resolvers/constants.ts" \
+    "$GSTACK_DIR/scripts/resolvers/learnings.ts"
+  do
+    [ -f "$_f" ] && _srcs="$_srcs $_f"
+  done
+  [ -n "$_srcs" ] && grep -IlE \
+      -e '_TEL=\$\(.*get telemetry' \
+      -e '_UPD=\$\(.*gstack-update-check' \
+      -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics|skill-end)' \
+      -e 'analytics/skill-usage\.jsonl' \
+      -e '_emit_block telemetry-prompt' \
+      -e '## Telemetry \(run last\)' \
+      -e '## Operational Self-Improvement' \
+      -e "'Telemetry \(run last\)'," \
+      ${_srcs} 2>/dev/null || true
 }
 
 if [ "$MODE" = "check" ]; then
