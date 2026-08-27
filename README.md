@@ -1,7 +1,7 @@
 # gstack-debloat
 
 [![ci](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml/badge.svg)](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml)
-[![tested against gstack v1.58](https://img.shields.io/badge/tested-gstack%20v1.58-blue)](https://github.com/garrytan/gstack)
+[![tested against gstack v1.71](https://img.shields.io/badge/tested-gstack%20v1.71-blue)](https://github.com/garrytan/gstack)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
@@ -62,6 +62,10 @@ Run `--check` to see whether your install still has any of it.
 | `{{LEARNINGS_SEARCH}}` / `{{LEARNINGS_LOG}}` | Generated skill-doc injections for learnings | Removed |
 | `### Refresh learnings` sections | Hardcoded mid-skill learnings re-pull blocks in `investigate` / `qa` / `ship` templates (v1.43+) | Removed |
 | Telemetry test assertions | Tests that would fail after stripping | Removed |
+| `bin/gstack-skill-start` noise | v1.71 moved the inline preamble bash into this script: the analytics append, the `.pending-*` drain, the learnings pull, the timeline write, the telemetry consent prompt, and the per-run update-check all live here now | Stripped in place (the script keeps emitting its STATUS lines) |
+| `gstack-skill-end` | v1.71's whole "Telemetry (run last)" epilogue in one binary — duration + outcome analytics, timeline write, remote hand-off | Neutralized |
+| `## Operational Self-Improvement` | v1.71 made the learnings write unconditional ("this step ALWAYS runs") in every skill's completion protocol | Removed |
+| `- Telemetry (run last)` skip-list rows | `composition.ts` + `autoplan` list a section that no longer exists | Removed |
 | `_UPD=$(gstack-update-check ...)` preamble check | Auto update-check that runs on **every** skill invocation (network call + echoed output = token waste) | Removed |
 | Standalone `_TEL=$(... get telemetry)` reads | Dead telemetry reads in `codex` / `autoplan` / `review` / `plan-*-review` / `ship` steps (value never consumed; runs `gstack-config` on every invoke) | Removed |
 | `/office-hours` "Garry's Personal Plea" | YC apply pitch (3 sub-tiers) + `ycombinator.com/apply?ref=gstack` | Removed |
@@ -128,21 +132,31 @@ That's it. Claude handles the install, runs the strip, and wires itself up to do
 
 The script is **idempotent**. Run it once, run it ten times. If telemetry is already gone, it exits in under a second.
 
-Seven phases:
+Eight phases:
 
 1. **Patch the generator** -- Edits `scripts/resolvers/preamble.ts` (and the v1.6+ `generate-preamble-bash.ts` sub-module) to remove telemetry variables, timeline startup logging, learnings injection, timeline-based context recovery, and the per-preamble auto update-check. Fixes the proactive prompt dependency chain that was gated on telemetry state.
 
 2. **Patch custom sources** -- Removes the custom learnings write-paths that live outside the generic resolver flow, including the `review` template and the hardcoded `### Refresh learnings` re-pull sections in the `investigate`, `qa`, and `ship` templates (added in gstack v1.43).
 
-3. **Neutralize binaries** -- Replaces telemetry, timeline, and learnings binaries in `bin/` with no-op stubs so even stale generated docs cannot write persisted state.
+3. **Patch the v1.71 runtime scripts** -- gstack v1.71 ("token-load reduction") moved
+   ~6.3KB of inline preamble bash out of the generators and into `bin/gstack-skill-start`,
+   and the skill-end telemetry fence into `bin/gstack-skill-end`. Every surface the earlier
+   phases stripped from the *generated* text now lives in those scripts instead, so the
+   renders look clean while the writes carry on. This phase strips them at the source.
+   `gstack-skill-start` stays alive and keeps emitting its STATUS lines (repo mode, session
+   kind, proactive suggestions, model overlays, the instruction-block gates); only the noise
+   comes out. The proactive-suggestions prompt was chained off the telemetry consent prompt
+   having fired, so it is re-chained onto the lake intro rather than left dead.
 
-4. **Patch tests** -- Strips telemetry-specific test cases so the suite stays green.
+4. **Neutralize binaries** -- Replaces telemetry, timeline, and learnings binaries in `bin/` with no-op stubs so even stale generated docs cannot write persisted state.
 
-5. **Strip office-hours self-promo** -- Patches `office-hours/SKILL.md.tmpl` and the Phase 6 section file `office-hours/sections/design-and-handoff.md.tmpl` (which v1.57+ Reads at runtime instead of inlining), plus the regenerated `.md` renders and the `.agents/` / `~/.codex/` copies. Removes the YC apply pitch, the curated "Founder Resources" funnel, and the "Want me to open these in your browser?" prompt from Phase 6 of the closing sequence. The skill still produces the design doc and recommends the next planning skill -- it just stops pitching YC.
+5. **Patch tests** -- Strips telemetry-specific test cases so the suite stays green.
 
-6. **Comprehensive sweep (Phase 4.8)** -- Walks every rendered `SKILL.md` and `sections/*.md` across **all** install copies (main, `.agents/`, `.kiro/`, `.factory/`, `~/.codex/`) and strips anything the targeted phases miss: standalone dead `_TEL=$(... get telemetry)` reads, orphaned stubbed-binary call lines, whole `### Refresh learnings` mini-sections, and the empty ```bash``` fences left behind. Guarded so it never leaves a dangling `$_TEL` reference, and the local builder profile is left intact.
+6. **Strip office-hours self-promo** -- Patches `office-hours/SKILL.md.tmpl` and the Phase 6 section file `office-hours/sections/design-and-handoff.md.tmpl` (which v1.57+ Reads at runtime instead of inlining), plus the regenerated `.md` renders and the `.agents/` / `~/.codex/` copies. Removes the YC apply pitch, the curated "Founder Resources" funnel, and the "Want me to open these in your browser?" prompt from Phase 6 of the closing sequence. The skill still produces the design doc and recommends the next planning skill -- it just stops pitching YC.
 
-7. **Verify** -- Greps every copy for telemetry/timeline/learnings references, residual `_UPD=` and `_TEL=` lines, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
+7. **Comprehensive sweep (Phase 4.8)** -- Walks every rendered `SKILL.md` and `sections/*.md` across **all** install copies (main, `.agents/`, `.kiro/`, `.factory/`, `~/.codex/`) and strips anything the targeted phases miss: standalone dead `_TEL=$(... get telemetry)` reads, orphaned stubbed-binary call lines, whole `### Refresh learnings` mini-sections, and the empty ```bash``` fences left behind. Guarded so it never leaves a dangling `$_TEL` reference, and the local builder profile is left intact.
+
+8. **Verify** -- Greps every copy for telemetry/timeline/learnings references, residual `_UPD=` and `_TEL=` lines, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
 
 ### Requirements
 
@@ -151,7 +165,7 @@ Seven phases:
 
 ### Compatibility
 
-Tested through gstack **v1.58.5.0**. The script is version-tolerant: each phase
+Tested through gstack **v1.71.0.0**. The script is version-tolerant: each phase
 matches its patterns idempotently and skips cleanly when a pattern is absent, so
 it keeps working across gstack releases. New persistence surfaces introduced
 upstream are added phase by phase as they appear.

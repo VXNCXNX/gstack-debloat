@@ -60,3 +60,12 @@ jobs:
             [ "$(wc -l < "$f")" -ge 50 ] || { echo "TOO SHORT: $f"; fail=1; }
           done
           exit $fail
+
+      # gstack's own doc-generation and preamble-runtime suites must survive the
+      # strip: they pin the STATUS-line contract and every render assertion the
+      # patched sources feed. Upstream adding a test that asserts the noise turns
+      # this red before a user hits it. The telemetry/learnings/timeline suites
+      # are deliberately NOT run -- they exercise the binaries the strip stubs.
+      - name: Test — gstack's doc-gen + skill-start suites stay green after the strip
+        working-directory: ${{ runner.temp }}/gstack
+        run: bun test test/gen-skill-docs.test.ts test/gstack-skill-start.test.ts
