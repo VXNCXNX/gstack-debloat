@@ -1596,6 +1596,53 @@ for _root in _scan_roots:
             _swept += 1
 print(f"  swept runtime noise from {_swept} skill/section/template files (all install copies)", file=sys.stderr)
 
+# ─── Phase 4.9: prune the router's routing table to skills that exist ────────
+# The gstack router (the repo-root SKILL.md, installed as the /gstack command)
+# carries a routing table of "- User asks X -> invoke `/skill`" lines. After a
+# --minimal prune those lines still name skills that are no longer on disk, so
+# the model is told to invoke commands that do not resolve. The prune's own
+# note called this cosmetic; it is not.
+#
+# Driven by what is actually on disk rather than by the keep-set, so it is
+# idempotent, self-healing after any regeneration, and a no-op on a full
+# install. Only the routing table is touched -- prose that merely mentions a
+# skill is left alone.
+_present = {d.name for d in GSTACK_DIR.iterdir()
+            if d.is_dir() and (d / 'SKILL.md').is_file()}
+
+_routers = [GSTACK_DIR / 'SKILL.md']
+for _h in ('.agents', '.kiro', '.factory', '.cursor', '.opencode',
+           '.hermes', '.slate', '.openclaw', '.gbrain'):
+    _routers.append(GSTACK_DIR / _h / 'skills' / 'gstack' / 'SKILL.md')
+_routers.append(Path.home() / '.codex' / 'skills' / 'gstack' / 'SKILL.md')
+
+_ROUTE_LINE = re.compile(r'^- .*→ invoke ')
+_SKILL_REF = re.compile(r'`/([a-z0-9][a-z0-9-]*)`')
+
+_routes_dropped = 0
+for _r in _routers:
+    if not _r.is_file():
+        continue
+    _lines = _r.read_text(encoding='utf-8').split('\n')
+    _out, _n = [], 0
+    for _ln in _lines:
+        if _ROUTE_LINE.match(_ln):
+            _refs = _SKILL_REF.findall(_ln)
+            _missing = [x for x in _refs if x not in _present]
+            if _refs and len(_missing) == len(_refs):
+                _n += 1
+                continue
+            # Mixed alternatives ("`/careful` or `/guard`"): drop only the half
+            # that is gone, keep the line pointing at what still resolves.
+            for _m in _missing:
+                _ln = _ln.replace('`/%s` or ' % _m, '').replace(' or `/%s`' % _m, '')
+        _out.append(_ln)
+    if _n:
+        _r.write_text('\n'.join(_out), encoding='utf-8')
+        _routes_dropped += _n
+if _routes_dropped:
+    print(f"  pruned {_routes_dropped} routing line(s) naming skills that are not installed", file=sys.stderr)
+
 PYEOF2
 
 python3 "$_TMP2" "$GSTACK_DIR"

@@ -78,6 +78,11 @@ while every JSONL append still fires.
 
 After patching, the script regenerates all 50+ `SKILL.md` files and runs a final comprehensive sweep (Phase 4.8) over **every** rendered skill and section file across all install copies — main, `.agents/`, `.kiro/`, `.factory/`, and `~/.codex/` — then verifies that telemetry, timeline, learnings, auto update-check, dead `_TEL=` reads, and office-hours self-promo references are gone. The local builder profile (`gstack-developer-profile`) is intentionally kept.
 
+After a `--minimal` prune, the router's routing table (the `- User asks X → invoke `/skill`` lines in
+the main `SKILL.md`) is filtered to skills that are actually on disk, so the model is never told to
+invoke a command that no longer resolves. It is driven by what is present rather than by the keep-set,
+so it self-heals after any regeneration and is a no-op on a full install.
+
 **What stays:** Everything that makes gstack useful. Skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. The opt-in `/gstack-upgrade --force` check stays too, so you can still upgrade manually when you choose. Only the *automatic* per-preamble update-check is removed. Nothing user-facing is removed except persisted memory features and the auto update-check.
 
 ---
