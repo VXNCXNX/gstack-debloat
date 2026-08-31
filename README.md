@@ -165,7 +165,7 @@ Eight phases:
 
 7. **Comprehensive sweep (Phase 4.8)** -- Walks every rendered `SKILL.md` and `sections/*.md` across **all** install copies (main, `.agents/`, `.kiro/`, `.factory/`, `~/.codex/`) and strips anything the targeted phases miss: standalone dead `_TEL=$(... get telemetry)` reads, orphaned stubbed-binary call lines, whole `### Refresh learnings` mini-sections, and the empty ```bash``` fences left behind. Guarded so it never leaves a dangling `$_TEL` reference, and the local builder profile is left intact.
 
-8. **Verify** -- Greps every copy for telemetry/timeline/learnings references, residual `_UPD=` and `_TEL=` lines, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
+8. **Verify** -- Greps every copy for telemetry/timeline/learnings references, executable `_UPD=$(` update checks, dead `_TEL=` reads, and `ycombinator.com/apply?ref=gstack` residue, failing loudly if anything slipped through.
 
 ### Requirements
 

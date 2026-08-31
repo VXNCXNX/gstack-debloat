@@ -843,8 +843,16 @@ if skill_start.exists():
         # below is gated on `[ -n "$_UPD" ]`, so an empty value disables it
         # without touching the opt-in /gstack-upgrade --force path.
         c = re.sub(
+            r'_UPD=""\n'
+            r'if \[ "\$_SESSION_KIND" != "spawned" \]; then\n'
+            r'[ \t]*_UPD=\$\("\$_BIN/gstack-update-check"[^\n]*\n'
+            r'(?:[ \t]*\[ -n "\$_UPD" \][^\n]*\n)?'
+            r'fi\n',
+            '_UPD=""\n', c,
+        )
+        c = re.sub(
             r'_UPD=\$\("\$_BIN/gstack-update-check"[^\n]*\n'
-            r'(?:\[ -n "\$_UPD" \][^\n]*\n)?',
+            r'(?:[ \t]*\[ -n "\$_UPD" \][^\n]*\n)?',
             '', c,
         )
 
@@ -1669,7 +1677,9 @@ do
   [ -f "$_f" ] && _SOURCES="$_SOURCES $_f"
 done
 
-REMAINING=$(grep -RIn \
+# `_UPD=""` is intentionally retained as the safe value for the downstream
+# upgrade-flow gate. Only command substitutions can execute the stripped check.
+REMAINING=$(grep -RInF \
   -e 'gstack-telemetry-log' \
   -e 'gstack-telemetry-sync' \
   -e 'gstack-timeline-log' \
@@ -1686,14 +1696,14 @@ REMAINING=$(grep -RIn \
   -e 'learnings.jsonl' \
   -e 'eureka.jsonl' \
   -e 'spec-review.jsonl' \
-  -e '_UPD=' \
+  -e '_UPD=$(' \
   "$GSTACK_DIR"/*/SKILL.md \
   ${_SOURCES} \
   2>/dev/null || true)
 
 _AGENTS_DIR="$GSTACK_DIR/.agents/skills/gstack"
 if [ -d "$_AGENTS_DIR" ]; then
-  _AGENTS_REMAINING=$(grep -RIn \
+  _AGENTS_REMAINING=$(grep -RInF \
     -e 'gstack-telemetry-log' \
     -e 'gstack-timeline-log' \
     -e 'gstack-learnings-log' \
@@ -1701,7 +1711,7 @@ if [ -d "$_AGENTS_DIR" ]; then
     -e 'timeline.jsonl' \
     -e 'learnings.jsonl' \
     -e 'skill-usage.jsonl' \
-    -e '_UPD=' \
+    -e '_UPD=$(' \
     "$_AGENTS_DIR"/*/SKILL.md \
     2>/dev/null || true)
   REMAINING="$REMAINING$_AGENTS_REMAINING"
