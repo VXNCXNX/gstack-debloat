@@ -48,10 +48,12 @@ New flags on `strip-telemetry.sh`:
 - Composes with the telemetry strip by default; `--minimal` implies a strip pass too.
 
 Mechanism (idempotent, re-run-safe):
-1. `CATALOG` = repo subdirs of `$GSTACK_DIR` that have `SKILL.md`.
+1. `CATALOG` = repo subdirs of `$GSTACK_DIR` that have `SKILL.md` **or only its `.tmpl`
+   source** (`claude/` is template-only; upstream renders it for `.agents`/Codex hosts).
 2. `STRIP_SET` = `CATALOG` − keep-list.
 3. For each name in `STRIP_SET`, remove its dir from every root:
-   `$GSTACK_DIR/<name>`, `$GSTACK_DIR/.agents/skills/gstack-<name>`,
+   `$GSTACK_DIR/<name>`, `$GSTACK_DIR/.agents/skills/gstack-<name>` (bare `<name>`
+   when the skill is itself named `gstack-*`, e.g. `gstack-upgrade`),
    `$GSTACK_DIR/.kiro/skills/...`, `$GSTACK_DIR/.factory/skills/...`,
    `~/.codex/skills/gstack-<name>`, `~/.agents/skills/gstack-<name>` (+ bare `<name>`).
 4. Run AFTER `gen:skill-docs` regeneration (so generated copies are pruned too),

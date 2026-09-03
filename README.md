@@ -1,7 +1,7 @@
 # gstack-debloat
 
 [![ci](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml/badge.svg)](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml)
-[![tested against gstack v1.71](https://img.shields.io/badge/tested-gstack%20v1.71-blue)](https://github.com/garrytan/gstack)
+[![tested against gstack v1.79](https://img.shields.io/badge/tested-gstack%20v1.79-blue)](https://github.com/garrytan/gstack)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
@@ -82,6 +82,17 @@ After a `--minimal` prune, the router's routing table (the `- User asks X → in
 the main `SKILL.md`) is filtered to skills that are actually on disk, so the model is never told to
 invoke a command that no longer resolves. It is driven by what is present rather than by the keep-set,
 so it self-heals after any regeneration and is a no-op on a full install.
+
+Two skills used to sit outside `--minimal`'s reach entirely, and both came back on every run:
+
+- **`claude`** ships template-only. Upstream renders `claude/SKILL.md.tmpl` for `.agents` / Codex
+  hosts and never writes a `SKILL.md` beside the source, so a catalog built from `SKILL.md` alone
+  never saw the skill, it could not enter the strip set, and `gen-skill-docs` re-created
+  `.agents/skills/gstack-claude` after every prune. The catalog now counts a `.tmpl`-only source too.
+- **`gstack-upgrade`** is named with the prefix the host copies use. Building its host path as
+  `gstack-<name>` aimed at `gstack-gstack-upgrade`, which never exists, so the real
+  `.agents/skills/gstack-upgrade` survived while its source dir was deleted. A name that already
+  starts with `gstack-` now maps to the bare host name.
 
 **What stays:** Everything that makes gstack useful. Skill discovery, repo mode detection, proactive suggestions, the browse daemon, review logs, and the core skill workflows. The opt-in `/gstack-upgrade --force` check stays too, so you can still upgrade manually when you choose. Only the *automatic* per-preamble update-check is removed. Nothing user-facing is removed except persisted memory features and the auto update-check.
 
@@ -174,7 +185,7 @@ Eight phases:
 
 ### Compatibility
 
-Tested through gstack **v1.71.0.0**. The script is version-tolerant: each phase
+Tested through gstack **v1.79.0.0**. The script is version-tolerant: each phase
 matches its patterns idempotently and skips cleanly when a pattern is absent, so
 it keeps working across gstack releases. New persistence surfaces introduced
 upstream are added phase by phase as they appear.

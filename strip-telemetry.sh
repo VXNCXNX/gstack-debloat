@@ -75,11 +75,17 @@ _rm_path() {
   else rm -rf "$1"; fi
 }
 
-_skill_catalog() {  # bare skill names = immediate $GSTACK_DIR subdirs with a SKILL.md
+# A skill is a $GSTACK_DIR subdir holding a SKILL.md *or* only its .tmpl source.
+# `claude/` (the CLI wrapper for non-Claude hosts) is template-only: upstream
+# renders it for .agents/Codex hosts and never writes a SKILL.md next to the
+# source. A SKILL.md-only catalog therefore never saw it, so it could not enter
+# the strip set, and gen-skill-docs re-created .agents/skills/gstack-claude on
+# every single run -- a skill outside the keep set that no prune could reach.
+_skill_catalog() {
   local _d _n
   for _d in "$GSTACK_DIR"/*/; do
     _n=$(basename "$_d")
-    [ -f "$_d/SKILL.md" ] && printf '%s\n' "$_n"
+    { [ -f "$_d/SKILL.md" ] || [ -f "$_d/SKILL.md.tmpl" ]; } && printf '%s\n' "$_n"
   done | sort -u
 }
 
@@ -90,14 +96,19 @@ _effective_keep() {  # keep override (else MINIMAL_KEEP) + ALWAYS_KEEP, sorted u
 }
 
 _prune_targets() {  # every on-disk path for stripped skill <name>, one per line
-  local _n="$1" _h
+  local _n="$1" _h _hn
+  # Host copies carry a `gstack-` prefix -- except for a skill whose own name
+  # already starts with it (gstack-upgrade), where gen-skill-docs emits the bare
+  # name. Prefixing unconditionally aimed at `gstack-gstack-upgrade`, which
+  # never exists, so the real host copies survived every prune.
+  case "$_n" in gstack-*) _hn="$_n" ;; *) _hn="gstack-$_n" ;; esac
   printf '%s\n' "$GSTACK_DIR/$_n"
   for _h in .agents .cursor .factory .opencode .kiro .hermes .slate .openclaw .gbrain; do
-    printf '%s\n' "$GSTACK_DIR/$_h/skills/gstack-$_n"
+    printf '%s\n' "$GSTACK_DIR/$_h/skills/$_hn"
   done
-  printf '%s\n' "$HOME/.codex/skills/gstack-$_n"
+  printf '%s\n' "$HOME/.codex/skills/$_hn"
   printf '%s\n' "$HOME/.codex/skills/gstack/$_n"
-  printf '%s\n' "$HOME/.agents/skills/gstack-$_n"
+  printf '%s\n' "$HOME/.agents/skills/$_hn"
 }
 
 list_skills() {
