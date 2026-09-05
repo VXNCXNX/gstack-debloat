@@ -138,9 +138,15 @@ Download the current `main` version to `~/.gstack/`, where it survives gstack up
 Run these same commands to update an existing installation.
 
 ```bash
-mkdir -p ~/.gstack
-curl -fsSL https://raw.githubusercontent.com/VXNCXNX/gstack-debloat/main/strip-telemetry.sh \
-  -o ~/.gstack/strip-telemetry.sh && chmod +x ~/.gstack/strip-telemetry.sh
+(
+  set -e
+  mkdir -p "$HOME/.gstack"
+  gstack_download=$(mktemp "$HOME/.gstack/strip-telemetry.sh.XXXXXX")
+  curl -fsSL https://raw.githubusercontent.com/VXNCXNX/gstack-debloat/main/strip-telemetry.sh \
+    -o "$gstack_download"
+  chmod +x "$gstack_download"
+  mv "$gstack_download" "$HOME/.gstack/strip-telemetry.sh"
+)
 ```
 
 For the published **v1.1.0** release specifically, replace `/main/` in the download
@@ -198,7 +204,7 @@ the moment a gstack upgrade reintroduces telemetry:
 Add this to your `~/.claude/CLAUDE.md` (or paste it into the Claude Code / Codex CLI as a prompt):
 
 ```
-Download https://raw.githubusercontent.com/VXNCXNX/gstack-debloat/main/strip-telemetry.sh to ~/.gstack/strip-telemetry.sh, make it executable, and run it. Then add a "gstack Post-Upgrade" section to my ~/.claude/CLAUDE.md that tells you to always run ~/.gstack/strip-telemetry.sh after any gstack upgrade.
+Download https://raw.githubusercontent.com/VXNCXNX/gstack-debloat/main/strip-telemetry.sh to a temporary file inside ~/.gstack/, creating that directory if needed. Only after the download succeeds, make the temporary file executable and move it to ~/.gstack/strip-telemetry.sh, then run it. Preserve any existing installation if the download fails. Then add a "gstack Post-Upgrade" section to my ~/.claude/CLAUDE.md that tells you to always run ~/.gstack/strip-telemetry.sh after any gstack upgrade.
 ```
 
 That's it. Claude handles the install, runs the strip, and wires itself up to do it again after every future upgrade.
