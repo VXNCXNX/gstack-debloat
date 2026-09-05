@@ -98,6 +98,34 @@ Two skills used to sit outside `--minimal`'s reach entirely, and both came back 
 
 ---
 
+### Codex startup and skill activation
+
+Codex skills can be symlinked from a Claude install while their generated preamble
+still points at `~/.codex/skills/gstack`. The strip patches the generator to find
+an executable startup helper in the repository or a global Codex, agents, or
+Claude install before deriving the other runtime paths. If startup is unavailable,
+the skill keeps its conservative defaults and reports the missing helper only
+when it blocks required work. It no longer asks for an upgrade on every run.
+
+Codex also gets gstack's existing compact catalog descriptions. Detailed trigger
+lists move into the skill body, as they already do for Claude Code. Automatic
+discovery remains enabled.
+
+Other installed skills have their own triggers. A description such as "Must always
+apply" or "Use when reading any TypeScript file" can activate those skills during
+a gstack task. Narrow those descriptions to the work that needs them. To make a
+particular skill explicit-only in Codex, set this in its `agents/openai.yaml`,
+preserving any existing metadata:
+
+```yaml
+policy:
+  allow_implicit_invocation: false
+```
+
+Explicit `$skill` invocation still works. Claude's `disable-model-invocation`
+frontmatter is a different setting. See the [Codex skill documentation](https://learn.chatgpt.com/docs/build-skills#optional-metadata).
+This script leaves unrelated skills and Codex's own announcement rules alone.
+
 ## Install
 
 One command. Lives in `~/.gstack/` so it survives gstack updates.

@@ -10,6 +10,8 @@
 #
 # The strip pass also regenerates the gitignored .agents/skills/ copies that
 # Pi and Codex read, since `git pull` cannot refresh them.
+# Codex also gets compact catalog descriptions and a startup fallback for
+# skills linked from a Claude install. Missing optional startup stays quiet.
 #
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
 # Compatible with gstack v0.x through v1.71+.
@@ -176,6 +178,7 @@ detect_noise() {
       -e '\.gstack/analytics/.*\.jsonl' \
       -e '^## Telemetry \(run last\)' \
       -e '^## Operational Self-Improvement' \
+      -e 'SKILL_START: unavailable.*stale install' \
       -e 'ycombinator\.com/apply\?ref=gstack' \
       -e '^### Founder Resources \(all tiers\)' \
       2>/dev/null || true
@@ -209,6 +212,7 @@ detect_noise() {
       -e '_emit_block telemetry-prompt' \
       -e '## Telemetry \(run last\)' \
       -e '## Operational Self-Improvement' \
+      -e 'SKILL_START: unavailable.*stale install' \
       -e "'Telemetry \(run last\)'," \
       ${_srcs} 2>/dev/null || true
 }
@@ -292,6 +296,54 @@ def strip_skill_usage(path: Path) -> None:
     c = re.sub(r"echo '[^\n]*skill-usage\.jsonl[^\n]*\n", '', c)
     if c != orig:
         path.write_text(c, encoding='utf-8')
+
+def patch_startup_bootstrap(c: str) -> str:
+    """Resolve shared Codex installs before deriving any runtime asset paths."""
+    # Before v1.71, startup ran inline and did not need this helper. Preserve
+    # that runtime even when a newer global installation is also available.
+    if (not re.search(r'_SS="[^"\n]*/gstack-skill-start"\n', c)
+            or '"$_SS" --skill "${ctx.skillName}"' not in c):
+        return c
+    # Use a host segment variable: the generator rewrites literal
+    # .claude/skills/gstack paths to .agents/skills/gstack after rendering.
+    fallback = '''${ctx.host === 'codex' ? `if [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then
+  for _GSTACK_HOST in .codex .agents .claude; do
+    _GSTACK_CANDIDATE="$HOME/$_GSTACK_HOST/skills/gstack"
+    if [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then
+      GSTACK_ROOT="$_GSTACK_CANDIDATE"
+      break
+    fi
+  done
+fi
+` : ''}'''
+    if '_GSTACK_CANDIDATE=' not in c:
+        c = c.replace('GSTACK_BIN="$GSTACK_ROOT/bin"', fallback + 'GSTACK_BIN="$GSTACK_ROOT/bin"')
+    c = c.replace(
+        'if [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+        'if [ ! -f "$GSTACK_ROOT/bin/gstack-skill-start" ] || [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace(
+        'if [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+        'if [ -f "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ] && [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace('[ -x "$_SS" ] || _SS=', '{ [ -f "$_SS" ] && [ -x "$_SS" ]; } || _SS=')
+    # Test existence before execution so a missing helper produces no shell
+    # error. Keep a machine-readable failure status for the degraded defaults.
+    c = re.sub(r'^(?:\[ -x "\$_SS" \] && )?"\$_SS" --skill',
+               '[ -f "$_SS" ] && [ -x "$_SS" ] && "$_SS" --skill', c, flags=re.MULTILINE)
+    c = c.replace(
+        "SKILL_START: unavailable \u2014 stale install; run ./setup or /gstack-upgrade (preamble degraded, continue the user's task)",
+        'SKILL_START: unavailable',
+    )
+    c = c.replace(
+        'prompts are DEFERRED to the next healthy run \u2014 never lost), tell\n'
+        'the user to run \\`./setup\\` or \\`/gstack-upgrade\\`, and proceed with their task.',
+        "prompts are DEFERRED to the next healthy run), and proceed with the user's task.\n"
+        'Mention missing startup only if it blocks a required operation; explain that\n'
+        'specific limitation and the repair then. A missing optional helper needs no\n'
+        'user-facing status update.',
+    )
+    return c
 
 # ─── Phase 1a: legacy monolith preamble.ts (v0.x / v1.0-v1.5) ───────────────
 
@@ -997,6 +1049,16 @@ if preamble_bash_v171.exists():
         )
         return c
     patch(preamble_bash_v171, _patch_bash_v171)
+    patch(preamble_bash_v171, patch_startup_bootstrap)
+
+# Upstream trims the Claude catalog but leaves Codex's full trigger lists and
+# "proactively invoke" instructions in always-loaded descriptions. Apply its
+# existing trim to Codex too, retaining the routing detail in the skill body.
+skill_docs_generator = GSTACK_DIR / 'scripts/gen-skill-docs.ts'
+patch(skill_docs_generator, lambda c: c.replace(
+    "if (host === 'claude' && CATALOG_MODE === 'trim') {",
+    "if ((host === 'claude' || host === 'codex') && CATALOG_MODE === 'trim') {",
+))
 
 
 # composition.ts + autoplan: both carry a "skipping these sections" checklist
@@ -1065,6 +1127,23 @@ print("  neutralized telemetry/timeline/learnings binaries", file=sys.stderr)
 test_file = GSTACK_DIR / 'test/gen-skill-docs.test.ts'
 if test_file.exists():
     c = test_file.read_text(encoding='utf-8')
+    # Retain the description-content assertion, but verify the new catalog
+    # contract: compact frontmatter and the detailed routing in the body.
+    def _compact_catalog_test(match):
+        block = match.group(0).replace(
+            'multiline descriptions preserved in Codex output',
+            'Codex descriptions are compact with routing preserved in the body',
+        )
+        block = block.replace(
+            'expect(descLines.length).toBeGreaterThan(1);',
+            "expect(descLines.length).toBe(0);\n"
+            "    expect(content).toContain('## When to invoke');",
+        )
+        block = block.replace('// Description should span multiple lines (block scalar)',
+                              '// Catalog descriptions occupy one line.')
+        return block
+    c = re.sub(r"  test\('multiline descriptions preserved in Codex output'.*?\n  \}\);",
+               _compact_catalog_test, c, flags=re.DOTALL)
     c = re.sub(r"  test\('generated SKILL\.md contains telemetry line'.*?\n  \}\);\n\n", '', c, flags=re.DOTALL)
     c = re.sub(r"  test\('preamble \.pending-\\\*.*?\n  \}\);\n\n", '', c, flags=re.DOTALL)
     c = re.sub(r"  test\('preamble-using skills have correct skill name in telemetry'.*?\n  \}\);\n\n", '', c, flags=re.DOTALL)
@@ -1531,6 +1610,31 @@ NOISE_BINS = [
 ]
 
 def strip_runtime_noise(c: str, path_str: str) -> str:
+    # Other host copies may not have been regenerated. Remove the same optional
+    # startup nag there, keeping the protocol failure signal and safe defaults.
+    c = c.replace(
+        'if [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+        'if [ ! -f "$GSTACK_ROOT/bin/gstack-skill-start" ] || [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace(
+        'if [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+        'if [ -f "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ] && [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace('[ -x "$_SS" ] || _SS=', '{ [ -f "$_SS" ] && [ -x "$_SS" ]; } || _SS=')
+    c = re.sub(r'^(?:\[ -x "\$_SS" \] && )?"\$_SS" --skill',
+               '[ -f "$_SS" ] && [ -x "$_SS" ] && "$_SS" --skill', c, flags=re.MULTILINE)
+    c = c.replace(
+        "SKILL_START: unavailable \u2014 stale install; run ./setup or /gstack-upgrade (preamble degraded, continue the user's task)",
+        'SKILL_START: unavailable',
+    )
+    c = c.replace(
+        'prompts are DEFERRED to the next healthy run \u2014 never lost), tell\n'
+        'the user to run `./setup` or `/gstack-upgrade`, and proceed with their task.',
+        "prompts are DEFERRED to the next healthy run), and proceed with the user's task.\n"
+        'Mention missing startup only if it blocks a required operation; explain that\n'
+        'specific limitation and the repair then. A missing optional helper needs no\n'
+        'user-facing status update.',
+    )
     # 1. 6-line telemetry preamble header block (copies that still carry it)
     c = re.sub(
         r'_TEL=\$\([^)]*gstack-config get telemetry[^\n]*\)\n'

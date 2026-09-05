@@ -14,9 +14,13 @@ on:
 jobs:
   strip:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout gstack-debloat
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install bun
         uses: oven-sh/setup-bun@v2
@@ -65,6 +69,9 @@ jobs:
             [ "$(wc -l < "$f")" -ge 50 ] || { echo "TOO SHORT: $f"; fail=1; }
           done
           exit $fail
+
+      - name: Test Codex startup paths and compact catalog after regeneration
+        run: python3 tests/test_codex_startup.py "$RUNNER_TEMP/gstack"
 
       # gstack's own doc-generation and preamble-runtime suites must survive the
       # strip: they pin the STATUS-line contract and every render assertion the
