@@ -66,6 +66,9 @@ jobs:
           done
           exit $fail
 
+      - name: Test Codex startup paths and compact catalog after regeneration
+        run: python3 tests/test_codex_startup.py "$RUNNER_TEMP/gstack"
+
       # gstack's own doc-generation and preamble-runtime suites must survive the
       # strip: they pin the STATUS-line contract and every render assertion the
       # patched sources feed. Upstream adding a test that asserts the noise turns
