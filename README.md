@@ -1,8 +1,13 @@
 # gstack-debloat
 
 [![ci](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml/badge.svg)](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/VXNCXNX/gstack-debloat)](https://github.com/VXNCXNX/gstack-debloat/releases/latest)
 [![tested against gstack v1.79](https://img.shields.io/badge/tested-gstack%20v1.79-blue)](https://github.com/garrytan/gstack)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+[v1.1.0](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.0) adds optional
+skill pruning, support for newer gstack runtime scripts, and quieter Codex startup
+with compact skill descriptions.
 
 gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
 
@@ -98,12 +103,13 @@ Two skills used to sit outside `--minimal`'s reach entirely, and both came back 
 
 ---
 
-### Codex startup and skill activation
+## Codex startup and skill activation
 
 Codex skills can be symlinked from a Claude install while their generated preamble
 still points at `~/.codex/skills/gstack`. The strip patches the generator to find
-an executable startup helper in the repository or a global Codex, agents, or
-Claude install before deriving the other runtime paths. If startup is unavailable,
+an executable startup helper file in the repository or a global Codex, agents, or
+Claude install before deriving the other runtime paths. Older gstack versions with
+inline startup retain their original runtime paths. If startup is unavailable,
 the skill keeps its conservative defaults and reports the missing helper only
 when it blocks required work. It no longer asks for an upgrade on every run.
 
@@ -126,14 +132,20 @@ Explicit `$skill` invocation still works. Claude's `disable-model-invocation`
 frontmatter is a different setting. See the [Codex skill documentation](https://learn.chatgpt.com/docs/build-skills#optional-metadata).
 This script leaves unrelated skills and Codex's own announcement rules alone.
 
-## Install
+## Install or update
 
-One command. Lives in `~/.gstack/` so it survives gstack updates.
+Download the current `main` version to `~/.gstack/`, where it survives gstack updates.
+Run these same commands to update an existing installation.
 
 ```bash
+mkdir -p ~/.gstack
 curl -fsSL https://raw.githubusercontent.com/VXNCXNX/gstack-debloat/main/strip-telemetry.sh \
   -o ~/.gstack/strip-telemetry.sh && chmod +x ~/.gstack/strip-telemetry.sh
 ```
+
+For the published **v1.1.0** release specifically, replace `/main/` in the download
+URL with `/v1.1.0/`. [Release notes](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.0)
+list the changes included in that version. Run the script after downloading it.
 
 ## Use
 
@@ -148,6 +160,23 @@ Custom gstack location:
 ```bash
 ~/.gstack/strip-telemetry.sh /path/to/your/gstack
 ```
+
+### Optional skill pruning
+
+The default run keeps installed skills. To reduce the skill catalog, inspect the
+curated keep-set and preview removals before applying `--minimal`:
+
+```bash
+~/.gstack/strip-telemetry.sh --list-skills
+~/.gstack/strip-telemetry.sh --minimal --dry-run
+~/.gstack/strip-telemetry.sh --minimal
+```
+
+Use `--keep "browse,qa,review,investigate"` for a custom set, or
+`--keep-file /path/to/skills.txt` with one skill name per line. Both imply
+`--minimal`; the gstack core and command shim are always retained. Pruning removes
+other skills from the install copies, so rerun with the same options after gstack
+upgrades or regeneration.
 
 ### Preview & verify
 
