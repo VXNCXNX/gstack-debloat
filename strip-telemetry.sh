@@ -318,13 +318,19 @@ fi
 ` : ''}'''
     if '_GSTACK_CANDIDATE=' not in c:
         c = c.replace('GSTACK_BIN="$GSTACK_ROOT/bin"', fallback + 'GSTACK_BIN="$GSTACK_ROOT/bin"')
+    c = c.replace(
+        'if [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+        'if [ ! -f "$GSTACK_ROOT/bin/gstack-skill-start" ] || [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace(
+        'if [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+        'if [ -f "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ] && [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace('[ -x "$_SS" ] || _SS=', '{ [ -f "$_SS" ] && [ -x "$_SS" ]; } || _SS=')
     # Test existence before execution so a missing helper produces no shell
     # error. Keep a machine-readable failure status for the degraded defaults.
-    if '[ -x "$_SS" ] && "$_SS"' not in c:
-        c = c.replace(
-            '"$_SS" --skill "${ctx.skillName}"',
-            '[ -x "$_SS" ] && "$_SS" --skill "${ctx.skillName}"',
-        )
+    c = re.sub(r'^(?:\[ -x "\$_SS" \] && )?"\$_SS" --skill',
+               '[ -f "$_SS" ] && [ -x "$_SS" ] && "$_SS" --skill', c, flags=re.MULTILINE)
     c = c.replace(
         "SKILL_START: unavailable \u2014 stale install; run ./setup or /gstack-upgrade (preamble degraded, continue the user's task)",
         'SKILL_START: unavailable',
@@ -1606,7 +1612,17 @@ NOISE_BINS = [
 def strip_runtime_noise(c: str, path_str: str) -> str:
     # Other host copies may not have been regenerated. Remove the same optional
     # startup nag there, keeping the protocol failure signal and safe defaults.
-    c = c.replace('\n"$_SS" --skill', '\n[ -x "$_SS" ] && "$_SS" --skill')
+    c = c.replace(
+        'if [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+        'if [ ! -f "$GSTACK_ROOT/bin/gstack-skill-start" ] || [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace(
+        'if [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+        'if [ -f "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ] && [ -x "$_GSTACK_CANDIDATE/bin/gstack-skill-start" ]; then',
+    )
+    c = c.replace('[ -x "$_SS" ] || _SS=', '{ [ -f "$_SS" ] && [ -x "$_SS" ]; } || _SS=')
+    c = re.sub(r'^(?:\[ -x "\$_SS" \] && )?"\$_SS" --skill',
+               '[ -f "$_SS" ] && [ -x "$_SS" ] && "$_SS" --skill', c, flags=re.MULTILINE)
     c = c.replace(
         "SKILL_START: unavailable \u2014 stale install; run ./setup or /gstack-upgrade (preamble degraded, continue the user's task)",
         'SKILL_START: unavailable',

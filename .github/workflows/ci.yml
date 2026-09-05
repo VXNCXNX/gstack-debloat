@@ -14,9 +14,13 @@ on:
 jobs:
   strip:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout gstack-debloat
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install bun
         uses: oven-sh/setup-bun@v2

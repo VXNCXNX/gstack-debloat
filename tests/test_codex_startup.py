@@ -76,7 +76,8 @@ class CodexStartupTests(unittest.TestCase):
         # Keep the process HOME intact; substitute only this snippet's paths.
         script = BOOTSTRAP.replace('$HOME', '$GSTACK_TEST_HOME')
         script += '\nprintf "ROOT=%s\\nBIN=%s\\nBROWSE=%s\\nDESIGN=%s\\n" "$GSTACK_ROOT" "$GSTACK_BIN" "$GSTACK_BROWSE" "$GSTACK_DESIGN"\n'
-        result = subprocess.run(['bash', '-c', script], cwd=self.repo, env=self.env, text=True, capture_output=True)
+        result = subprocess.run(['bash', '-c', script], cwd=self.repo, env=self.env,
+                                text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, '')
         return result.stdout
@@ -107,6 +108,18 @@ class CodexStartupTests(unittest.TestCase):
     def test_nonexecutable_native_helper_falls_back(self):
         self.install(self.home / '.codex/skills/gstack', executable=False)
         self.assert_root(self.install(self.home / '.claude/skills/gstack'))
+
+    def test_native_helper_directory_falls_back(self):
+        (self.home / '.codex/skills/gstack/bin/gstack-skill-start').mkdir(parents=True)
+        self.assert_root(self.install(self.home / '.claude/skills/gstack'))
+
+    def test_shared_helper_directory_is_skipped(self):
+        (self.home / '.agents/skills/gstack/bin/gstack-skill-start').mkdir(parents=True)
+        self.assert_root(self.install(self.home / '.claude/skills/gstack'))
+
+    def test_only_helper_directory_degrades_without_shell_error(self):
+        (self.repo / '.agents/skills/gstack/bin/gstack-skill-start').mkdir(parents=True)
+        self.assertTrue(self.run_bootstrap().startswith('SKILL_START: unavailable\n'))
 
     def test_missing_helper_degrades_without_shell_error_or_upgrade_prompt(self):
         output = self.run_bootstrap()
