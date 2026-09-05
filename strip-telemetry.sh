@@ -299,6 +299,11 @@ def strip_skill_usage(path: Path) -> None:
 
 def patch_startup_bootstrap(c: str) -> str:
     """Resolve shared Codex installs before deriving any runtime asset paths."""
+    # Before v1.71, startup ran inline and did not need this helper. Preserve
+    # that runtime even when a newer global installation is also available.
+    if (not re.search(r'_SS="[^"\n]*/gstack-skill-start"\n', c)
+            or '"$_SS" --skill "${ctx.skillName}"' not in c):
+        return c
     # Use a host segment variable: the generator rewrites literal
     # .claude/skills/gstack paths to .agents/skills/gstack after rendering.
     fallback = '''${ctx.host === 'codex' ? `if [ ! -x "$GSTACK_ROOT/bin/gstack-skill-start" ]; then

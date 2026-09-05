@@ -3,6 +3,7 @@
 Fixtures stay in the system temp directory for inspection.
 """
 
+import ast
 import os
 from pathlib import Path
 import re
@@ -15,6 +16,39 @@ import unittest
 GSTACK = Path(sys.argv.pop(1)).resolve()
 CONTENT = (GSTACK / '.agents/skills/gstack-investigate/SKILL.md').read_text()
 BOOTSTRAP = re.search(r'## Preamble \(run first\)\s+```bash\n(.*?)\n```', CONTENT, re.S).group(1)
+
+
+class StartupPatchCompatibilityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Load only the patch function, without running the install mutation
+        # code in the surrounding embedded Python script.
+        script = (Path(__file__).resolve().parents[1] / 'strip-telemetry.sh').read_text()
+        patcher = script.split("<< 'PYEOF'\n", 1)[1].split('\nPYEOF\n', 1)[0]
+        function = next(node for node in ast.parse(patcher).body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'patch_startup_bootstrap')
+        namespace = {'re': re}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), '<startup patch>', 'exec'), namespace)
+        cls.patch = staticmethod(namespace['patch_startup_bootstrap'])
+
+    def test_legacy_inline_runtime_is_unchanged(self):
+        source = '''const runtimeRoot = `_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+GSTACK_ROOT="$HOME/${hostConfig.globalRoot}"
+GSTACK_BIN="$GSTACK_ROOT/bin"
+GSTACK_BROWSE="$GSTACK_ROOT/browse/dist"
+GSTACK_DESIGN="$GSTACK_ROOT/design/dist"
+`;
+return `${runtimeRoot}_BRANCH=$(git branch --show-current 2>/dev/null)
+echo "BRANCH: $_BRANCH"`;
+'''
+        # A mention in prose does not make an inline preamble helper-based.
+        for prefix in ('', '// gstack-skill-start is used by newer versions.\n'):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(self.patch(prefix + source), prefix + source)
+
+    def test_current_helper_bootstrap_remains_idempotent(self):
+        source = (GSTACK / 'scripts/resolvers/preamble/generate-preamble-bash.ts').read_text()
+        self.assertEqual(self.patch(source), source)
 
 
 class CodexStartupTests(unittest.TestCase):
