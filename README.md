@@ -5,9 +5,12 @@
 [![tested against gstack v1.84.1](https://img.shields.io/badge/tested-gstack%20v1.84.1-blue)](https://github.com/garrytan/gstack)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-[v1.1.0](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.0) adds optional
-skill pruning, support for newer gstack runtime scripts, and quieter Codex startup
-with compact skill descriptions.
+[v1.1.1](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.1) keeps the strip
+working against gstack v1.84.1: the learnings verification markers are now
+line-anchored headings, so upstream's new routing prose ("run Prior Learnings
+and Confidence Calibration") can no longer false-positive a clean strip.
+v1.1.0 added optional skill pruning, support for newer gstack runtime scripts,
+and quieter Codex startup with compact skill descriptions.
 
 gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
 
@@ -149,8 +152,8 @@ Run these same commands to update an existing installation.
 )
 ```
 
-For the published **v1.1.0** release specifically, replace `/main/` in the download
-URL with `/v1.1.0/`. [Release notes](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.0)
+For the published **v1.1.1** release specifically, replace `/main/` in the download
+URL with `/v1.1.1/`. [Release notes](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.1)
 list the changes included in that version. Run the script after downloading it.
 
 ## Use
