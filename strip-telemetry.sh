@@ -1794,6 +1794,12 @@ done
 
 # `_UPD=""` is intentionally retained as the safe value for the downstream
 # upgrade-flow gate. Only command substitutions can execute the stripped check.
+# 'Prior Learnings' / 'Capture Learnings' are verified as line-start ATX
+# headings only (the anchored grep right below this one): gstack v1.84+ uses
+# the phrases in routing prose ("run Prior Learnings and Confidence
+# Calibration") with no persistence section behind them, and even the literal
+# heading text can appear mid-line in prose ("See the `## Prior Learnings`
+# section"), so a plain fixed-string match still false-positives.
 REMAINING=$(grep -RInF \
   -e 'gstack-telemetry-log' \
   -e 'gstack-telemetry-sync' \
@@ -1805,8 +1811,6 @@ REMAINING=$(grep -RInF \
   -e 'Telemetry (run last)' \
   -e 'Operational Self-Improvement' \
   -e 'LEARNINGS:' \
-  -e 'Prior Learnings' \
-  -e 'Capture Learnings' \
   -e 'timeline.jsonl' \
   -e 'learnings.jsonl' \
   -e 'eureka.jsonl' \
@@ -1815,6 +1819,17 @@ REMAINING=$(grep -RInF \
   "$GSTACK_DIR"/*/SKILL.md \
   ${_SOURCES} \
   2>/dev/null || true)
+
+# Line-anchored heading check: a re-introduced learnings section must fail
+# loudly, but only as a real heading -- exactly '##' or '###' followed by the
+# section name at line start (trailing whitespace tolerated). Same file set
+# as the fixed-string grep above.
+_HEADING_REMAINING=$(grep -RInE \
+  -e '^#{2,3} (Prior|Capture) Learnings[[:space:]]*$' \
+  "$GSTACK_DIR"/*/SKILL.md \
+  ${_SOURCES} \
+  2>/dev/null || true)
+REMAINING="$REMAINING$_HEADING_REMAINING"
 
 _AGENTS_DIR="$GSTACK_DIR/.agents/skills/gstack"
 if [ -d "$_AGENTS_DIR" ]; then

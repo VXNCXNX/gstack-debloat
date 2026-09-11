@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml/badge.svg)](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/VXNCXNX/gstack-debloat)](https://github.com/VXNCXNX/gstack-debloat/releases/latest)
-[![tested against gstack v1.79](https://img.shields.io/badge/tested-gstack%20v1.79-blue)](https://github.com/garrytan/gstack)
+[![tested against gstack v1.84.1](https://img.shields.io/badge/tested-gstack%20v1.84.1-blue)](https://github.com/garrytan/gstack)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [v1.1.0](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.0) adds optional
@@ -248,7 +248,7 @@ Eight phases:
 
 ### Compatibility
 
-Tested through gstack **v1.79.0.0**. The script is version-tolerant: each phase
+Tested through gstack **v1.84.1.0**. The script is version-tolerant: each phase
 matches its patterns idempotently and skips cleanly when a pattern is absent, so
 it keeps working across gstack releases. New persistence surfaces introduced
 upstream are added phase by phase as they appear.
@@ -274,6 +274,14 @@ No. Core gstack workflows still work. The script removes telemetry and persisted
 
 **Will gstack updates re-add this stuff?**
 Yes. Upstream updates can reintroduce telemetry, timeline logging, learnings persistence, and the auto update-check. That is why the CLAUDE.md instruction exists.
+
+**What about the new opt-in surfaces gstack has added since v1.83?**
+Two upstream additions send data off-machine or persist it locally, and this script deliberately leaves both alone because they are **off by default and consent-gated**, unlike the telemetry it strips:
+
+- **Memorable bridge** (v1.83, `gstack-memorable enable`): hands each prompt to the third-party memorable.sh CLI through a Claude Code hook. Registers only when you run the command; revoke with `gstack-memorable disable`.
+- **Design detector** (v1.84, `bin/gstack-design-detect`): probes for the impeccable engine on design skills and, with your one-time consent, downloads it from impeccable's own releases into `~/.impeccable`, recording an egress receipt first. Turn every trace off with `gstack-config set design_detector off`.
+
+Neither runs anything or leaves the machine without an explicit yes, which is the line this script draws: strip everything that is on by default, document everything that asks first.
 
 **Does this work with vendored/local installs?**
 Yes. Pass the install path as an argument: `~/.gstack/strip-telemetry.sh ./path/to/gstack`
