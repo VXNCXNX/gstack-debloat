@@ -1794,6 +1794,9 @@ done
 
 # `_UPD=""` is intentionally retained as the safe value for the downstream
 # upgrade-flow gate. Only command substitutions can execute the stripped check.
+# 'Prior Learnings' / 'Capture Learnings' are matched at heading level only:
+# gstack v1.84+ uses the phrases in routing prose ("run Prior Learnings and
+# Confidence Calibration") with no persistence section behind them.
 REMAINING=$(grep -RInF \
   -e 'gstack-telemetry-log' \
   -e 'gstack-telemetry-sync' \
@@ -1805,8 +1808,10 @@ REMAINING=$(grep -RInF \
   -e 'Telemetry (run last)' \
   -e 'Operational Self-Improvement' \
   -e 'LEARNINGS:' \
-  -e 'Prior Learnings' \
-  -e 'Capture Learnings' \
+  -e '## Prior Learnings' \
+  -e '### Prior Learnings' \
+  -e '## Capture Learnings' \
+  -e '### Capture Learnings' \
   -e 'timeline.jsonl' \
   -e 'learnings.jsonl' \
   -e 'eureka.jsonl' \
