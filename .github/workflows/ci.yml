@@ -35,6 +35,22 @@ jobs:
       - name: Record gstack version
         run: cat "$RUNNER_TEMP/gstack/VERSION" 2>/dev/null || echo "unknown"
 
+      # Runs on the pristine clone, before the in-place strip below: the
+      # extract strips its own temp copy and must leave --from untouched.
+      - name: Extract standalone skills (codex, office-hours, plan-design-review, investigate)
+        run: ./extract-skills.sh --from "$RUNNER_TEMP/gstack" --out "$RUNNER_TEMP/skills" codex,office-hours,plan-design-review,investigate
+
+      - name: Check — extracted skills carry no gstack install, telemetry, learnings, update-check or plan gate
+        run: ./extract-skills.sh --check "$RUNNER_TEMP/skills"
+
+      - name: Idempotent — a second extract into the same dir converges byte for byte
+        run: |
+          cp -R "$RUNNER_TEMP/skills" "$RUNNER_TEMP/skills-first"
+          before=$(git -C "$RUNNER_TEMP/gstack" status --porcelain)
+          ./extract-skills.sh --from "$RUNNER_TEMP/gstack" --out "$RUNNER_TEMP/skills" codex,office-hours,plan-design-review,investigate
+          diff -r "$RUNNER_TEMP/skills-first" "$RUNNER_TEMP/skills"
+          [ "$(git -C "$RUNNER_TEMP/gstack" status --porcelain)" = "$before" ] || { echo "extract modified --from"; exit 1; }
+
       - name: Strip
         run: ./strip-telemetry.sh "$RUNNER_TEMP/gstack"
 
