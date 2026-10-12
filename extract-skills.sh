@@ -126,9 +126,11 @@ case "$ROOT" in /*) ;; *) die "--root must be an absolute path: $ROOT" ;; esac
 ROOT="${ROOT%/}"
 # The skills reach their own helpers through ROOT: written as $HOME/... in shell
 # blocks and ~/... in prose when it sits under the home dir, else absolute.
-case "$ROOT/" in
-  "$HOME"/*) EXTRACT_ROOT_SH="\$HOME/${ROOT#"$HOME"/}"; EXTRACT_ROOT_DOC="~/${ROOT#"$HOME"/}" ;;
-  *)         EXTRACT_ROOT_SH="$ROOT"; EXTRACT_ROOT_DOC="$ROOT" ;;
+_home="${HOME%/}"
+case "$ROOT" in
+  "$_home")   EXTRACT_ROOT_SH="\$HOME"; EXTRACT_ROOT_DOC="~" ;;
+  "$_home"/*) EXTRACT_ROOT_SH="\$HOME/${ROOT#"$_home"/}"; EXTRACT_ROOT_DOC="~/${ROOT#"$_home"/}" ;;
+  *)          EXTRACT_ROOT_SH="$ROOT"; EXTRACT_ROOT_DOC="$ROOT" ;;
 esac
 export EXTRACT_ROOT_SH EXTRACT_ROOT_DOC
 [ "$OUT" = "$ROOT" ] || echo "extract-skills: paths point at $ROOT; copy the folders there from $OUT"
