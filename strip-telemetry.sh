@@ -10,11 +10,12 @@
 #
 # The strip pass also regenerates the gitignored .agents/skills/ copies that
 # Pi and Codex read, since `git pull` cannot refresh them.
-# Codex also gets compact catalog descriptions and a startup fallback for
-# skills linked from a Claude install. Missing optional startup stays quiet.
+# Codex also gets compact catalog descriptions and (gstack v1.71-v1.90) a
+# startup fallback for skills linked from a Claude install. Missing optional
+# startup stays quiet.
 #
 # Idempotent: safe to run multiple times. Exits gracefully if already clean.
-# Compatible with gstack v0.x through v1.71+.
+# Compatible with gstack v0.x through v1.91+.
 #
 # Usage: ./strip-telemetry.sh [FLAGS] [GSTACK_DIR]
 #   GSTACK_DIR defaults to ~/.claude/skills/gstack
@@ -176,9 +177,12 @@ detect_noise() {
       -e '_UPD=\$\(.*gstack-update-check' \
       -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics|skill-end)' \
       -e '\.gstack/analytics/.*\.jsonl' \
-      -e '^## Telemetry \(run last\)' \
+      -e '>>.*/analytics/[a-z-]+\.jsonl' \
+      -e 'Telemetry \(run last\)' \
       -e '^## Operational Self-Improvement' \
       -e 'SKILL_START: unavailable.*stale install' \
+      -e 'or `/gstack-upgrade`, and proceed with their task' \
+      -e 'show-first-use-notice$' \
       -e 'ycombinator\.com/apply\?ref=gstack' \
       -e '^### Founder Resources \(all tiers\)' \
       2>/dev/null || true
@@ -200,20 +204,34 @@ detect_noise() {
     "$GSTACK_DIR/scripts/resolvers/preamble/generate-search-before-building.ts" \
     "$GSTACK_DIR/scripts/resolvers/composition.ts" \
     "$GSTACK_DIR/scripts/resolvers/constants.ts" \
-    "$GSTACK_DIR/scripts/resolvers/learnings.ts"
+    "$GSTACK_DIR/scripts/resolvers/learnings.ts" \
+    "$GSTACK_DIR/scripts/resolvers/review-army.ts" \
+    "$GSTACK_DIR/scripts/resolvers/plan-gates.ts" \
+    "$GSTACK_DIR/scripts/resolvers/spec-review.ts" \
+    "$GSTACK_DIR/scripts/resolvers/outside-voice.ts" \
+    "$GSTACK_DIR/bin/gstack-codex-probe" \
+    "$GSTACK_DIR/lib/autoplan-timing.ts"
   do
     [ -f "$_f" ] && _srcs="$_srcs $_f"
   done
+  # v1.91 additions: state-root analytics appends ($GSTACK_STATE_ROOT/analytics,
+  # no `~/.gstack` for the render marker to catch), the outside-review notice
+  # marker file, and /autoplan's cross-run timing append.
   [ -n "$_srcs" ] && grep -IlE \
       -e '_TEL=\$\(.*get telemetry' \
       -e '_UPD=\$\(.*gstack-update-check' \
       -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics|skill-end)' \
       -e 'analytics/skill-usage\.jsonl' \
+      -e '>>.*/analytics/[a-z-]+\.jsonl' \
       -e '_emit_block telemetry-prompt' \
       -e '## Telemetry \(run last\)' \
       -e '## Operational Self-Improvement' \
       -e 'SKILL_START: unavailable.*stale install' \
       -e "'Telemetry \(run last\)'," \
+      -e 'or \\`/gstack-upgrade\\`, and proceed with their task' \
+      -e 'show-first-use-notice$' \
+      -e 'codex-review-notice-shown' \
+      -e 'appendFileSync\(target' \
       ${_srcs} 2>/dev/null || true
 }
 
@@ -335,7 +353,16 @@ fi
         "SKILL_START: unavailable \u2014 stale install; run ./setup or /gstack-upgrade (preamble degraded, continue the user's task)",
         'SKILL_START: unavailable',
     )
-    c = c.replace(
+    return c
+
+def patch_degraded_startup_prose(c: str) -> str:
+    """Stop the degraded-mode prose from asking for an upgrade on every run.
+
+    Separate from patch_startup_bootstrap: v1.91 dropped the `_SS=` fallback
+    that function keys on (the start is one plain command, #2763, and Codex
+    root resolution lives in runtime-root.ts), but kept this prose.
+    """
+    return c.replace(
         'prompts are DEFERRED to the next healthy run \u2014 never lost), tell\n'
         'the user to run \\`./setup\\` or \\`/gstack-upgrade\\`, and proceed with their task.',
         "prompts are DEFERRED to the next healthy run), and proceed with the user's task.\n"
@@ -343,7 +370,6 @@ fi
         'specific limitation and the repair then. A missing optional helper needs no\n'
         'user-facing status update.',
     )
-    return c
 
 # ─── Phase 1a: legacy monolith preamble.ts (v0.x / v1.0-v1.5) ───────────────
 
@@ -543,9 +569,12 @@ if proactive.exists():
 search_building = GSTACK_DIR / 'scripts/resolvers/preamble/generate-search-before-building.ts'
 if search_building.exists():
     def _patch_search(c):
+        # v1.91 resolves the state root and branch first, so the eureka append
+        # is no longer the fence's first line.
         return re.sub(
             r'\n\n\*\*Eureka:\*\*[^\n]*\n'
             r'\\`\\`\\`bash\n'
+            r'(?:[^\n]*\n)*?'
             r'[^\n]*eureka\.jsonl[^\n]*\n'
             r'\\`\\`\\`',
             '', c,
@@ -573,8 +602,13 @@ if first_run.exists():
 
 learnings = GSTACK_DIR / 'scripts/resolvers/learnings.ts'
 if learnings.exists():
+    # v1.91 added two exports other resolvers import (review-army.ts). The stub
+    # keeps every export name, or gen:skill-docs dies on a missing export and
+    # leaves the install half-stripped. The bash it would emit is a no-op.
     learnings.write_text(
         "import type { TemplateContext } from './types';\n\n"
+        "export const learningsCapture = (_command: string): string => ':';\n"
+        "export const LEARNINGS_VERDICT = ':';\n\n"
         "export function generateLearningsSearch(_ctx: TemplateContext): string {\n"
         "  return '';\n"
         "}\n\n"
@@ -600,6 +634,16 @@ if review_army.exists():
     def _patch_review_army(c):
         c = re.sub(r'3\. Past learnings for this domain \(if any exist\):.*?4\. Instructions:\n', '3. Instructions:\n', c, flags=re.DOTALL)
         c = re.sub(r"Past learnings: \{learnings or 'none'\}\n\n", '', c)
+        # v1.91: a "Defensive framing" step sits between the learnings pull and
+        # the instructions, and the pull goes through learningsCapture(). Drop
+        # step 3 and renumber the two after it.
+        _n = len(c)
+        c = re.sub(r'3\. Past learnings for this domain \(if any exist\):\n.*?\n\n(?=4\. )', '', c, flags=re.DOTALL)
+        if len(c) != _n:
+            c = c.replace('\n4. **Defensive framing', '\n3. **Defensive framing')
+            c = c.replace('\n5. Instructions:\n', '\n4. Instructions:\n')
+        c = re.sub(r"\nPast learnings: \{learnings or 'none'\}(?=\")", '', c)
+        c = re.sub(r"import \{ learningsCapture, LEARNINGS_VERDICT \} from '\./learnings';\n", '', c)
         return c
     patch(review_army, _patch_review_army)
 
@@ -612,16 +656,16 @@ if investigate_tmpl.exists():
 # v1.43: hardcoded "### Refresh learnings" mid-skill sections (investigate / qa /
 # ship templates). Unlike {{LEARNINGS_SEARCH}} placeholders, these embed literal
 # gstack-learnings-search bash calls, so the learnings.ts resolver patch misses
-# them. Strip header -> "useful information." paragraph + optional trailing rule.
+# them. Strip the header and every line up to the next `---` rule or ##/###
+# heading (the closing sentence changed in v1.91), plus that rule.
+REFRESH_LEARNINGS_RE = re.compile(r'### Refresh learnings [^\n]*\n(?:(?!---\n|#{2,3} )[^\n]*\n)*(?:---\n\n)?')
 def _strip_refresh_learnings(c: str) -> str:
-    return re.sub(
-        r'### Refresh learnings .*?useful information\.\n\n(---\n\n)?',
-        '', c, flags=re.DOTALL,
-    )
+    return REFRESH_LEARNINGS_RE.sub('', c)
 for _rl_tmpl in [
     GSTACK_DIR / 'investigate/SKILL.md.tmpl',
     GSTACK_DIR / 'qa/SKILL.md.tmpl',
     GSTACK_DIR / 'ship/SKILL.md.tmpl',
+    GSTACK_DIR / 'ship/sections/adversarial.md.tmpl',
 ]:
     patch(_rl_tmpl, _strip_refresh_learnings)
 
@@ -905,9 +949,12 @@ if skill_start.exists():
         # output). Keep the variable defined: the upgrade-flow instruction block
         # below is gated on `[ -n "$_UPD" ]`, so an empty value disables it
         # without touching the opt-in /gstack-upgrade --force path.
+        # The guard condition varies by release (v1.71 `!= "spawned"`, v1.91
+        # `"$_NO_HUMAN" != "yes"`). Match any: the second regex below would
+        # otherwise strip the body alone and leave an empty `if ... fi`.
         c = re.sub(
             r'_UPD=""\n'
-            r'if \[ "\$_SESSION_KIND" != "spawned" \]; then\n'
+            r'if \[ [^\n]*\]; then\n'
             r'[ \t]*_UPD=\$\("\$_BIN/gstack-update-check"[^\n]*\n'
             r'(?:[ \t]*\[ -n "\$_UPD" \][^\n]*\n)?'
             r'fi\n',
@@ -934,7 +981,18 @@ if skill_start.exists():
         c = re.sub(r'echo "TEL_START: \$_TEL_START"\n', '', c)
 
         # Local analytics: dir creation, the per-run skill-usage.jsonl append,
-        # and the .pending-* remote-telemetry finalize drain.
+        # and the .pending-* remote-telemetry finalize drain. v1.91 wraps both in
+        # an unattended-session `if ... else ... fi`; drop the wrapper with them.
+        c = re.sub(
+            r'mkdir -p "\$_GH/analytics"[^\n]*\n'
+            r'(?:#[^\n]*\n)*'
+            r'if \[ "\$_SESSION_KIND" = "unattended" \]; then\n'
+            r'[ \t]*echo "TELEMETRY_WRITE: [^\n]*\n'
+            r'else\n'
+            r'.*?^done\n'
+            r'fi\n',
+            '', c, flags=re.DOTALL | re.MULTILINE,
+        )
         c = re.sub(
             r'mkdir -p "\$_GH/analytics"[^\n]*\n'
             r'if \[ "\$_TEL" != "off" \]; then\n'
@@ -956,6 +1014,15 @@ if skill_start.exists():
             r'if \[ -f "\$_LEARN_FILE" \]; then\n'
             r'.*?^fi\n',
             '', c, flags=re.DOTALL | re.MULTILINE,
+        )
+        # v1.91: unattended runs on an ephemeral root announce the learnings
+        # write they skip. There is no learnings write left to skip.
+        c = re.sub(
+            r'(?:#[^\n]*\n)*'
+            r'if \[ "\$_SESSION_KIND" = "unattended" \] && \[ "\$_DURABLE" = "no" \]; then\n'
+            r'[ \t]*echo "learnings: skipped[^\n]*\n'
+            r'fi\n',
+            '', c,
         )
 
         # Session timeline write.
@@ -1014,19 +1081,29 @@ if brain_sync_block.exists():
             " * artifacts a skill just produced are never enqueued, so they never sync.\n",
         )
         # `\`` = an escaped backtick inside the generator's template literal.
+        # The closing sentence differs by release (v1.71 "as the block
+        # instructs.", v1.91 "as instructed."). v1.91's skill-end skips the
+        # drain for an unattended session (never sync off-machine); the fence
+        # keeps that rule by asking gstack-session-kind.
         _F = '\\`\\`\\`'
-        _anchor = 'exactly as the block instructs.`;'
-        if _anchor in c:
+        _bin = '${ctx.paths.binDir}'
+        for _tail in ('exactly as the block instructs.', 'exactly as instructed.'):
+            _anchor = _tail + '`;'
+            if _anchor not in c:
+                continue
             c = c.replace(_anchor,
-                'exactly as the block instructs.\n'
+                _tail + '\n'
                 '\n'
                 'At skill END, drain the artifacts queue (no-op when sync is off):\n'
                 '\n'
                 + _F + 'bash\n'
-                '${ctx.paths.binDir}/gstack-brain-sync --discover-new 2>/dev/null || true\n'
-                '${ctx.paths.binDir}/gstack-brain-sync --once 2>/dev/null || true\n'
+                'if [ "$(' + _bin + '/gstack-session-kind 2>/dev/null)" != "unattended" ]; then\n'
+                '  ' + _bin + '/gstack-brain-sync --discover-new 2>/dev/null || true\n'
+                '  ' + _bin + '/gstack-brain-sync --once 2>/dev/null || true\n'
+                'fi\n'
                 + _F + '`;',
             )
+            break
         return c
     patch(brain_sync_block, _patch_brain_sync)
 
@@ -1050,14 +1127,17 @@ if preamble_bash_v171.exists():
         return c
     patch(preamble_bash_v171, _patch_bash_v171)
     patch(preamble_bash_v171, patch_startup_bootstrap)
+    patch(preamble_bash_v171, patch_degraded_startup_prose)
 
 # Upstream trims the Claude catalog but leaves Codex's full trigger lists and
 # "proactively invoke" instructions in always-loaded descriptions. Apply its
 # existing trim to Codex too, retaining the routing detail in the skill body.
+# v1.91 reads the mode from options.catalogMode instead of a module constant.
 skill_docs_generator = GSTACK_DIR / 'scripts/gen-skill-docs.ts'
-patch(skill_docs_generator, lambda c: c.replace(
-    "if (host === 'claude' && CATALOG_MODE === 'trim') {",
-    "if ((host === 'claude' || host === 'codex') && CATALOG_MODE === 'trim') {",
+patch(skill_docs_generator, lambda c: re.sub(
+    r"if \(host === 'claude' && (CATALOG_MODE|options\.catalogMode) === 'trim'\) \{",
+    r"if ((host === 'claude' || host === 'codex') && \1 === 'trim') {",
+    c,
 ))
 
 
@@ -1078,6 +1158,123 @@ for _tmpl in ('autoplan/SKILL.md.tmpl', 'autoplan/SKILL.md'):
         _new = re.sub(r'^- Telemetry \(run last\)\n', '', _c, flags=re.MULTILINE)
         if _new != _c:
             _p.write_text(_new, encoding='utf-8')
+
+# ─── Phase 1f: gstack v1.91 surfaces ─────────────────────────────────────────
+
+# v1.91 split review.ts: the plan-file "Learnings Logging" section now lives in
+# plan-gates.ts and renders into /review's plan-completion section.
+def _strip_learnings_logging(c):
+    return re.sub(
+        r'### Learnings Logging \(plan-file discrepancies only\)\n\n'
+        r'.*?'
+        r'These are informational in the review output but too noisy for durable memory\.\n\n',
+        '', c, flags=re.DOTALL,
+    )
+patch(GSTACK_DIR / 'scripts/resolvers/plan-gates.ts', _strip_learnings_logging)
+
+# v1.91 moved the spec-review loop out of review.ts into spec-review.ts and
+# writes its metrics under $GSTACK_STATE_ROOT/analytics/ (no `~/.gstack` in the
+# path, so the older review.ts patches never see it). Drop the append and the
+# prose that tells the model to run it. /plan-ceo-review made the append a
+# required save; its paragraph keeps the stop rule for the saves that remain.
+spec_review = GSTACK_DIR / 'scripts/resolvers/spec-review.ts'
+if spec_review.exists():
+    def _patch_spec_review(c):
+        _F = r'\\`\\`\\`'
+        _block = (_F + r'bash\n'
+                  r'GSTACK_STATE_ROOT=\$\([^\n]*gstack-paths --get GSTACK_STATE_ROOT\);[^\n]*\n'
+                  r'mkdir -p "\$GSTACK_STATE_ROOT/analytics"[^\n]*\n'
+                  r'echo [^\n]*spec-review\.jsonl[^\n]*\n'
+                  + _F + r'\n')
+        c = re.sub(
+            r"\n\nAppend the helper's actual metrics to the existing analytics log[^\n]*\n[^\n]*\n"
+            + _block + r'Use iterations, issues_found.*?never invented\.(?=`;)',
+            '', c, flags=re.DOTALL,
+        )
+        c = re.sub(_block, '', c)
+        c = c.replace('\n\n3. Append metrics:`}', '`}')
+        c = c.replace(" : 'Replace ITERATIONS, FOUND, FIXED, REMAINING, SCORE with actual values from the review.'}", " : ''}")
+        c = c.replace(
+            'Recording the **0H spec-review metrics** is\n'
+            'required when writing is permitted, even if the reviewer failed. Append the\n'
+            'actual outcome below; failed mkdir or append stops the review. When writing is\n'
+            'forbidden, show the actual fields as not persisted and continue without writing.\n',
+            'Report the **0H spec-review metrics** in the summary, shown as not persisted\n'
+            '(gstack-debloat removed the metrics log), even if the reviewer failed.\n',
+        )
+        return c
+    patch(spec_review, _patch_spec_review)
+
+# "Telemetry (run last)" is gone, but v1.91 plan reviews name it as a control-flow
+# step ("After the gate passes: Telemetry ... then cache refresh"). Rewrite each
+# reference so the model is never sent to a step that no longer exists. One table
+# of literal rewrites per file; an absent string is a no-op, so reruns are safe.
+TELEMETRY_STEP_PROSE = {
+    'plan-ceo-review/SKILL.md.tmpl': [
+        (',\n  then run telemetry as the last review operation.', '.'),
+        ("After the refresh, run the preamble's **Telemetry (run last)** once. The review\nis now finished.",
+         'After the refresh, the review\nis now finished.'),
+    ],
+    'plan-eng-review/SKILL.md.tmpl': [
+        ('; the Prior Learnings cross-project question waits for Step 0', ''),
+        (' Defer Operational Self-Improvement, Telemetry and Plan Status Footer to finish;',
+         ' Defer Plan Status Footer to finish;'),
+        (' If startup values and a permitted telemetry command are available, run **Telemetry (run last)**'
+         ' once with `OUTCOME=error` and the actual `ERROR_MESSAGE`/`FAILED_STEP`.', ''),
+        (' Run permitted **Telemetry (run last)** with `OUTCOME=success`.', ''),
+        ('After the gate passes: **Telemetry (run last)** once with `OUTCOME=success`, then cache refresh.',
+         'After the gate passes: cache refresh.'),
+        ('After success telemetry and cache dispatch,', 'After cache dispatch,'),
+    ],
+    'plan-eng-review/sections/review-sections.md.tmpl': [
+        ('Only after both pass, run success telemetry and cache refresh;', 'Only after both pass, run cache refresh;'),
+        (' Review operational learnings\nper preamble; use Capture Learnings below for other discoveries. Never log twice.', ''),
+    ],
+}
+def _rewrite_table(rows):
+    def _fn(c):
+        for _old, _new in rows:
+            c = c.replace(_old, _new)
+        return c
+    return _fn
+for _rel, _rows in TELEMETRY_STEP_PROSE.items():
+    patch(GSTACK_DIR / _rel, _rewrite_table(_rows))
+
+# v1.91.92 outside-review notice: the first Codex send per state root prints
+# where the code goes and drops a marker file. The repo owner consents to
+# outside reviews globally, so the notice is noise. The codex_reviews switch
+# itself stays enforced in the send binaries: it is silent unless the user
+# sets it to disabled, and stripping it would turn an explicit "off" into a
+# silent send. Restore the notice: `git checkout -- bin/gstack-codex-probe
+# scripts/resolvers/outside-voice.ts scripts/resolvers/design.ts` in gstack.
+patch(GSTACK_DIR / 'scripts/resolvers/outside-voice.ts', lambda c: c
+      .replace('"$_CODEX_PROBE" show-first-use-notice\n', '')
+      .replace('\nUnset means the default, enabled; the first send prints a one-time notice.', '\nUnset means the default, enabled.'))
+patch(GSTACK_DIR / 'scripts/resolvers/design.ts', lambda c: c.replace(
+    '(unset means the default, enabled; the first send prints a one-time notice)',
+    '(unset means the default, enabled)'))
+
+# v1.91.70 /autoplan appends every phase's wall time to a cross-run history,
+# <state root>/analytics/autoplan-timing.jsonl, read back only for the "last
+# ten runs" estimate. Same category as skill-usage.jsonl: drop the append. The
+# run directory's timing.json (the unattended artifact contract) still writes.
+autoplan_timing = GSTACK_DIR / 'lib/autoplan-timing.ts'
+if autoplan_timing.exists():
+    def _patch_autoplan_timing(c):
+        c = c.replace(
+            "analytics: 'appended' | 'skipped_ephemeral' }",
+            "analytics: 'appended' | 'skipped_ephemeral' | 'stripped' }",
+        )
+        return re.sub(
+            r'  const target = opts\.analytics \?\? analyticsPath\(env\);\n'
+            r'  fs\.mkdirSync\(path\.dirname\(target\), \{ recursive: true \}\);\n'
+            r'  fs\.appendFileSync\(target, JSON\.stringify\(\{\n'
+            r'.*?\n'
+            r"  return \{ entry, total_wall_s: timing\.total_wall_s, analytics: 'appended' \};\n",
+            "  return { entry, total_wall_s: timing.total_wall_s, analytics: 'stripped' };\n",
+            c, flags=re.DOTALL,
+        )
+    patch(autoplan_timing, _patch_autoplan_timing)
 
 # ─── Phase 2: neutralize telemetry binaries ───────────────────────────────────
 
@@ -1117,6 +1314,24 @@ if codex_probe.exists():
         r'\1\n  return 0  # stripped by gstack-debloat\n\2',
         c, flags=re.DOTALL | re.MULTILINE,
     )
+    # v1.91.92 once-per-machine outside-review notice (see Phase 1f).
+    c = re.sub(
+        r'(_gstack_codex_first_use_notice\(\) \{).*?^(\})',
+        r'\1\n  return 0  # stripped by gstack-debloat\n\2',
+        c, flags=re.DOTALL | re.MULTILINE,
+    )
+    # v1.91 main() reads the telemetry setting for the two log functions
+    # stubbed above. Drop the read once nothing else consumes $_TEL.
+    _no_tel = re.sub(
+        r'  case "\$_cmd" in\n'
+        r'    [a-z|-]+\)\n'
+        r'[ \t]*# Telemetry is the caller\'s choice[^\n]*\n'
+        r'[^\n]*_TEL=\$\([^\n]*get telemetry[^\n]*\n'
+        r'  esac\n',
+        '', c,
+    )
+    if not re.search(r'\$_TEL\b|\$\{_TEL[}:+]', _no_tel):
+        c = _no_tel
     if c != orig:
         codex_probe.write_text(c, encoding='utf-8')
 
@@ -1197,6 +1412,34 @@ if test_file.exists():
     # path-shape assertions above it are the point of the test.
     c = c.replace("    expect(content).toContain('$GSTACK_BIN/gstack-config');\n", '')
 
+    # v1.91 surface (Phase 1f). The plan-review exit gate no longer has a
+    # Telemetry step to order against the cache refresh; the remaining
+    # placement assertions still pin the gate and the handoff.
+    for _line in (
+        "        const telemetry = tail.indexOf('**Telemetry (run last)**');\n",
+        "        expect(telemetry).toBeGreaterThan(0);\n",
+        "        if (skill === 'plan-ceo-review') expect(telemetry).toBeGreaterThan(cache);\n",
+        "        else expect(telemetry).toBeLessThan(cache);\n",
+        "          expect(finalHandoff.indexOf('Call ExitPlanMode')).toBeGreaterThan(finalHandoff.indexOf('**Telemetry (run last)**'));\n",
+        # The CEO spec-review metrics append is stripped; the report prose
+        # assertions around it still hold.
+        "    expect(report).toContain('GSTACK_STATE_ROOT=$(~/.claude/skills/gstack/bin/gstack-paths --get GSTACK_STATE_ROOT); : \"${GSTACK_STATE_ROOT:?gstack-paths failed; reinstall with ./setup or /gstack-upgrade}\"');\n",
+        "    expect(report).toContain('mkdir -p \"$GSTACK_STATE_ROOT/analytics\" || exit 1');\n",
+        "    expect(report).toContain('>> \"$GSTACK_STATE_ROOT/analytics/spec-review.jsonl\" || exit 1');\n",
+    ):
+        c = c.replace(_line, '')
+    c = c.replace("'After success telemetry and cache dispatch, call ExitPlanMode'", "'After cache dispatch, call ExitPlanMode'")
+    # office-hours #879 ordered the inline design doc after the metrics append;
+    # anchor on the spec-review finalizer sentence that precedes it instead.
+    c = c.replace(
+        "    const beforeApproval = between(handoff, 'spec-review.jsonl', approval);\n",
+        "    const beforeApproval = between(handoff, 'Preserve the Assignment, coaching, approval, and Handoff.', approval);\n",
+    )
+    c = c.replace(
+        "    expectOrdered(handoff, ['spec-review.jsonl', 'output the full design doc inline'",
+        "    expectOrdered(handoff, ['Preserve the Assignment, coaching, approval, and Handoff.', 'output the full design doc inline'",
+    )
+
     test_file.write_text(c, encoding='utf-8')
 
 # v1.71: test/gstack-skill-start.test.ts pins the runtime script's behaviour --
@@ -1246,6 +1489,14 @@ if ss_test.exists():
             "      expect(third).toContain('GSTACK_INSTRUCTION_BEGIN: telemetry-prompt');",
             "      expect(third).not.toContain('GSTACK_INSTRUCTION_BEGIN: telemetry-prompt');",
         )
+        # v1.91 unattended kind: the telemetry writer and the learnings write
+        # it announces skipping are stripped for every kind, so the skip lines
+        # are never printed. The egress test pins the update-check, telemetry
+        # and skill-end sinks the strip removes in every session kind; the
+        # unattended artifacts-sync skip stays covered by the test above it.
+        c = c.replace("      expect(out).toMatch(/^TELEMETRY_WRITE: skipped \\(unattended session\\)$/m);\n", '')
+        c = c.replace("      expect(out).toMatch(/^learnings: skipped \\(state root is ephemeral; set GSTACK_STATE_ROOT\\)$/m);\n", '')
+        c = re.sub(r"\n  test\('unattended session makes no egress call.*?\n  \}\);\n", '\n', c, flags=re.DOTALL)
         # Render-path assertions name skills that --minimal may have pruned.
         # Check whichever of the candidates is actually installed.
         c = c.replace(
@@ -1660,7 +1911,7 @@ def strip_runtime_noise(c: str, path_str: str) -> str:
     )
     # 3a. whole "### Refresh learnings ..." mini-sections (header -> "useful
     #     information.") so removing the inner bash call doesn't orphan the prose.
-    c = re.sub(r'### Refresh learnings .*?useful information\.\n\n(---\n\n)?', '', c, flags=re.DOTALL)
+    c = re.sub(r'### Refresh learnings [^\n]*\n(?:(?!---\n|#{2,3} )[^\n]*\n)*(?:---\n\n)?', '', c)
     # 3b. multi-line learnings-log JSON blocks, then any single-line stubbed-binary
     #     call lines (binaries are already neutralized; the lines are pure noise)
     c = re.sub(
@@ -1785,6 +2036,10 @@ for _f in \
   "$GSTACK_DIR/scripts/resolvers/learnings.ts" \
   "$GSTACK_DIR/scripts/resolvers/review.ts" \
   "$GSTACK_DIR/scripts/resolvers/review-army.ts" \
+  "$GSTACK_DIR/scripts/resolvers/plan-gates.ts" \
+  "$GSTACK_DIR/scripts/resolvers/spec-review.ts" \
+  "$GSTACK_DIR/scripts/resolvers/outside-voice.ts" \
+  "$GSTACK_DIR/lib/autoplan-timing.ts" \
   "$GSTACK_DIR/investigate/SKILL.md.tmpl" \
   "$GSTACK_DIR/learn/SKILL.md.tmpl" \
   "$GSTACK_DIR/careful/SKILL.md.tmpl"
@@ -1816,6 +2071,8 @@ REMAINING=$(grep -RInF \
   -e 'eureka.jsonl' \
   -e 'spec-review.jsonl' \
   -e '_UPD=$(' \
+  -e 'show-first-use-notice' \
+  -e 'appendFileSync(target' \
   "$GSTACK_DIR"/*/SKILL.md \
   ${_SOURCES} \
   2>/dev/null || true)
@@ -1850,6 +2107,17 @@ fi
 if [ -n "$REMAINING" ]; then
   echo "  WARNING: references still found in:" >&2
   echo "$REMAINING" >&2
+  exit 1
+fi
+
+# The skill-end artifacts-sync fence is a kept feature that Phase 1e re-inserts
+# at an anchor sentence. When upstream rewords that sentence the insert is a
+# silent no-op and sync quietly stops, so a stubbed gstack-skill-end without
+# the fence fails here instead.
+_BSB="$GSTACK_DIR/scripts/resolvers/preamble/generate-brain-sync-block.ts"
+if [ -f "$_BSB" ] && grep -q '^exit 0$' "$GSTACK_DIR/bin/gstack-skill-end" 2>/dev/null \
+   && ! grep -q 'gstack-brain-sync --discover-new' "$_BSB"; then
+  echo "  WARNING: skill-end artifacts-sync fence not restored in $_BSB (anchor sentence changed upstream)" >&2
   exit 1
 fi
 

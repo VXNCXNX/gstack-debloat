@@ -2,15 +2,20 @@
 
 [![ci](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml/badge.svg)](https://github.com/VXNCXNX/gstack-debloat/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/VXNCXNX/gstack-debloat)](https://github.com/VXNCXNX/gstack-debloat/releases/latest)
-[![tested against gstack v1.84.1](https://img.shields.io/badge/tested-gstack%20v1.84.1-blue)](https://github.com/garrytan/gstack)
+[![tested against gstack v1.91.93](https://img.shields.io/badge/tested-gstack%20v1.91.93-blue)](https://github.com/garrytan/gstack)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-[v1.1.1](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.1) keeps the strip
-working against gstack v1.84.1: the learnings verification markers are now
-line-anchored headings, so upstream's new routing prose ("run Prior Learnings
-and Confidence Calibration") can no longer false-positive a clean strip.
-v1.1.0 added optional skill pruning, support for newer gstack runtime scripts,
-and quieter Codex startup with compact skill descriptions.
+[v1.2.0](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.2.0) makes the strip
+work on gstack v1.91.93. Since v1.84.1 upstream moved several writes to new
+places. Spec-review metrics now append under the state root, `/autoplan` keeps a
+cross-run timing log, and the learnings resolver exports helpers that other
+resolvers import, so the old stub broke `gen:skill-docs`. The strip patches all
+of these at the source, and `--check` stays clean after `gen:skill-docs --host all`.
+It also drops the once-per-machine outside-review notice. [v1.91 changes](#v191-changes)
+lists each upstream addition and whether the strip removes or keeps it.
+v1.1.1 line-anchored the learnings verification markers. v1.1.0 added optional
+skill pruning, support for newer gstack runtime scripts, and quieter Codex
+startup with compact skill descriptions.
 
 gstack is a skills framework for AI coding agents (Claude Code, Codex). The QA, code review, shipping, and design-review workflows are useful.
 
@@ -80,6 +85,11 @@ while every JSONL append still fires.
 | `- Telemetry (run last)` skip-list rows | `composition.ts` + `autoplan` list a section that no longer exists | Removed |
 | `_UPD=$(gstack-update-check ...)` preamble check | Auto update-check that runs on **every** skill invocation (network call + echoed output = token waste) | Removed |
 | Standalone `_TEL=$(... get telemetry)` reads | Dead telemetry reads in `codex` / `autoplan` / `review` / `plan-*-review` / `ship` steps (value never consumed; runs `gstack-config` on every invoke) | Removed |
+| `$GSTACK_STATE_ROOT/analytics/spec-review.jsonl` | v1.91 spec-review loop metrics (iterations, issues, score); `/plan-ceo-review` made the append a required save | Removed. The review summary still reports the numbers |
+| `analytics/autoplan-timing.jsonl` | v1.91 `/autoplan` cross-run phase-timing history | Append removed. The run directory's `timing.json` still writes |
+| Outside-review first-use notice | v1.91.92 prints where Codex sends your code, once per state root, and writes a marker file | Removed (see [v1.91 changes](#v191-changes)) |
+| `TELEMETRY_WRITE: skipped` / `learnings: skipped` | v1.91 unattended-session lines announcing writes it skips | Removed with the writers |
+| `### Learnings Logging` in plan-file audits | v1.91 moved this `gstack-learnings-log` call from `review.ts` to `plan-gates.ts` | Removed |
 | `/office-hours` "Garry's Personal Plea" | YC apply pitch (3 sub-tiers) + `ycombinator.com/apply?ref=gstack` | Removed |
 | `/office-hours` "Founder Resources (all tiers)" | 34-item curated YC / Lightcone / Paul Graham funnel + open-in-browser flow | Removed |
 | `/office-hours` `Then proceed to Founder Resources below.` stitches | Cross-tier handoff lines into the resource funnel | Removed |
@@ -106,15 +116,38 @@ Two skills used to sit outside `--minimal`'s reach entirely, and both came back 
 
 ---
 
+## v1.91 changes
+
+Upstream added these between v1.84.1 and v1.91.93. The strip removes tracking,
+persisted session data, and nags that fire on every run. It keeps features.
+
+- **Outside-review notice (`codex_reviews`, v1.91.92).** Stripped. The first Codex send per state root printed where your code goes and wrote a marker file; the strip stubs that notice and its `show-first-use-notice` call. The `codex_reviews` switch stays enforced in the send binaries, so `gstack-config set codex_reviews disabled` still refuses every outside review. To restore the notice, run `git checkout -- bin/gstack-codex-probe scripts/resolvers/outside-voice.ts scripts/resolvers/design.ts` in your gstack checkout, then `bun run gen:skill-docs`.
+- **`unattended` session kind (v1.91.70).** Kept. A parent agent runs gstack with no prompts and no sync. Its `TELEMETRY_WRITE: skipped` and `learnings: skipped` lines go, because those writers are gone for every session kind.
+- **`/autoplan` timing history (v1.91.70).** Stripped. The append to `analytics/autoplan-timing.jsonl` goes; the run directory's `timing.json`, which the parent validates, stays. The Phase 0 estimate then prints `no history`.
+- **Findings-derived review log and gate list (v1.91.70).** Kept. Review-log status and the approval gate are workflow output, not tracking.
+- **Gate-edit detector and claims-need-evidence kernel (#3114).** Kept. They check diffs and claims inside `/review` and `/ship` and persist nothing new.
+- **Autoplan guard log (`analytics/autoplan-guard.jsonl`).** Kept. It records the publication guard's deny decisions for `gstack-doctor`, not usage.
+- **Transcript consent (#3017, #3023).** Kept. Transcript ingest is off by default and only `/setup-gbrain` and `/sync-gbrain` ask. Turn it off again with `gstack-config set transcript_ingest_mode off`.
+- **Advisory freshness (#3073).** Kept. The weekly model-recommendation check is a workflow in gstack's own GitHub repo and never runs on your machine. The one-time notice per model-policy version also stays.
+- **Spec-review metrics (moved to `spec-review.ts`).** Stripped. The append now writes under `$GSTACK_STATE_ROOT/analytics/`, which the old `~/.gstack` check missed.
+- **Skill-end artifacts sync.** Kept and re-gated. The restored fence skips the drain in unattended sessions, as upstream's `gstack-skill-end` does, and the strip now fails loudly if upstream rewords the sentence the fence attaches to.
+- **Timeline Stop hook (setup).** Not stripped. `./setup` registers it in `~/.claude/settings.json`, outside the gstack checkout, and it still starts `bun` at the end of every Claude Code turn. Turn it off with `./setup --no-timeline-stop-hook`.
+
+---
+
 ## Codex startup and skill activation
 
-Codex skills can be symlinked from a Claude install while their generated preamble
-still points at `~/.codex/skills/gstack`. The strip patches the generator to find
-an executable startup helper file in the repository or a global Codex, agents, or
-Claude install before deriving the other runtime paths. Older gstack versions with
-inline startup retain their original runtime paths. If startup is unavailable,
-the skill keeps its conservative defaults and reports the missing helper only
-when it blocks required work. It no longer asks for an upgrade on every run.
+From v1.91 gstack resolves the Codex runtime root itself. It tries an exported
+`GSTACK_ROOT`, then the repo-local `.agents/skills/gstack`, then
+`${CODEX_HOME:-~/.codex}/skills/gstack`. When none exists, the preamble prints one
+line naming the path it tried and `./setup --host codex`, then stops. `./setup
+--host codex` now creates that runtime root, so the strip adds no fallback on
+v1.91. On gstack v1.71 through v1.90 the strip still patches the generator to find
+the startup helper in a global Codex, agents, or Claude install.
+
+On every version, the degraded-mode prose no longer asks for `./setup` or
+`/gstack-upgrade` on every run. The model mentions a missing startup helper only
+when it blocks the task.
 
 Codex also gets gstack's existing compact catalog descriptions. Detailed trigger
 lists move into the skill body, as they already do for Claude Code. Automatic
@@ -152,8 +185,8 @@ Run these same commands to update an existing installation.
 )
 ```
 
-For the published **v1.1.1** release specifically, replace `/main/` in the download
-URL with `/v1.1.1/`. [Release notes](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.1.1)
+For the published **v1.2.0** release specifically, replace `/main/` in the download
+URL with `/v1.2.0/`. [Release notes](https://github.com/VXNCXNX/gstack-debloat/releases/tag/v1.2.0)
 list the changes included in that version. Run the script after downloading it.
 
 ## Use
@@ -233,6 +266,9 @@ Eight phases:
    kind, proactive suggestions, model overlays, the instruction-block gates); only the noise
    comes out. The proactive-suggestions prompt was chained off the telemetry consent prompt
    having fired, so it is re-chained onto the lake intro rather than left dead.
+   v1.91 adds a source pass for the writes that moved again: the spec-review and
+   `/autoplan` timing appends, the plan-file learnings log, the outside-review notice,
+   and the plan-review prose that named the deleted Telemetry step.
 
 4. **Neutralize binaries** -- Replaces telemetry, timeline, and learnings binaries in `bin/` with no-op stubs so even stale generated docs cannot write persisted state.
 
@@ -251,7 +287,7 @@ Eight phases:
 
 ### Compatibility
 
-Tested through gstack **v1.84.1.0**. The script is version-tolerant: each phase
+Tested through gstack **v1.91.93.0**. The script is version-tolerant: each phase
 matches its patterns idempotently and skips cleanly when a pattern is absent, so
 it keeps working across gstack releases. New persistence surfaces introduced
 upstream are added phase by phase as they appear.
@@ -285,6 +321,8 @@ Two upstream additions send data off-machine or persist it locally, and this scr
 - **Design detector** (v1.84, `bin/gstack-design-detect`): probes for the impeccable engine on design skills and, with your one-time consent, downloads it from impeccable's own releases into `~/.impeccable`, recording an egress receipt first. Turn every trace off with `gstack-config set design_detector off`.
 
 Neither runs anything or leaves the machine without an explicit yes, which is the line this script draws: strip everything that is on by default, document everything that asks first.
+
+Outside reviews (v1.91.92) are the exception that is on by default: `/review`, `/ship` and the plan reviews send code to Codex (Claude Code when you run gstack inside Codex) unless `codex_reviews` is `disabled`. The strip removes only the once-per-machine notice about it. The switch still works, `gstack-config set codex_reviews disabled` turns every outside review off, and [v1.91 changes](#v191-changes) shows how to restore the notice.
 
 **Does this work with vendored/local installs?**
 Yes. Pass the install path as an argument: `~/.gstack/strip-telemetry.sh ./path/to/gstack`

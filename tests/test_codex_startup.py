@@ -1,5 +1,10 @@
 """Run against generated skills: python3 tests/test_codex_startup.py GSTACK_DIR.
 
+Targets gstack v1.91+, where Codex root resolution lives in upstream's
+runtime-root.ts (exported GSTACK_ROOT, then the repo-local install, then
+CODEX_HOME) and a missing install fails with one fix line. The strip's own
+cross-install fallback applies only to v1.71-v1.90 renders.
+
 Fixtures stay in the system temp directory for inspection.
 """
 
@@ -62,74 +67,55 @@ class CodexStartupTests(unittest.TestCase):
         git = commands / 'git'
         git.write_text('#!/bin/sh\nprintf "%s\\n" "$GSTACK_TEST_REPO"\n')
         git.chmod(0o755)
-        self.env = dict(os.environ, GSTACK_TEST_HOME=str(self.home), GSTACK_TEST_REPO=str(self.repo))
+        self.env = dict(os.environ, GSTACK_TEST_HOME=str(self.home), GSTACK_TEST_REPO=str(self.repo),
+                        CODEX_HOME=str(self.home / '.codex'))
+        self.env.pop('GSTACK_ROOT', None)
         self.env['PATH'] = str(commands) + os.pathsep + self.env['PATH']
 
-    def install(self, root, executable=True, succeeds=True):
+    def install(self, root):
         helper = root / 'bin/gstack-skill-start'
         helper.parent.mkdir(parents=True, exist_ok=True)
-        helper.write_text('#!/bin/sh\necho "SKILL_START_PROTO: 1"\n' if succeeds else '#!/bin/sh\nexit 1\n')
-        helper.chmod(0o755 if executable else 0o644)
+        helper.write_text('#!/bin/sh\necho "SKILL_START_PROTO: 1"\n')
+        helper.chmod(0o755)
         return root
 
     def run_bootstrap(self):
         # Keep the process HOME intact; substitute only this snippet's paths.
         script = BOOTSTRAP.replace('$HOME', '$GSTACK_TEST_HOME')
-        script += '\nprintf "ROOT=%s\\nBIN=%s\\nBROWSE=%s\\nDESIGN=%s\\n" "$GSTACK_ROOT" "$GSTACK_BIN" "$GSTACK_BROWSE" "$GSTACK_DESIGN"\n'
-        result = subprocess.run(['bash', '-c', script], cwd=self.repo, env=self.env,
-                                text=True, capture_output=True, timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, '')
-        return result.stdout
+        script += '\nprintf "ROOT=%s\\nBIN=%s\\n" "$GSTACK_ROOT" "$GSTACK_BIN"\n'
+        return subprocess.run(['bash', '-c', script], cwd=self.repo, env=self.env,
+                              text=True, capture_output=True, timeout=30)
 
     def assert_root(self, root):
-        output = self.run_bootstrap()
-        self.assertIn('SKILL_START_PROTO: 1\n', output)
-        self.assertIn(f'ROOT={root}\nBIN={root}/bin\nBROWSE={root}/browse/dist\nDESIGN={root}/design/dist\n', output)
+        result = self.run_bootstrap()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, '')
+        self.assertIn('SKILL_START_PROTO: 1\n', result.stdout)
+        self.assertIn(f'ROOT={root}\nBIN={root}/bin\n', result.stdout)
 
-    def test_claude_shared_install(self):
-        self.assert_root(self.install(self.home / '.claude/skills/gstack'))
-
-    def test_agents_shared_install(self):
-        self.assert_root(self.install(self.home / '.agents/skills/gstack'))
+    def test_codex_home_install(self):
+        self.assert_root(self.install(self.home / '.codex/skills/gstack'))
 
     def test_repo_runtime_wins_over_global(self):
         self.install(self.home / '.codex/skills/gstack')
         self.assert_root(self.install(self.repo / '.agents/skills/gstack'))
 
-    def test_native_global_wins_over_shared(self):
-        self.install(self.home / '.claude/skills/gstack')
-        self.assert_root(self.install(self.home / '.codex/skills/gstack'))
-
     def test_stale_repo_directory_falls_back(self):
         (self.repo / '.agents/skills/gstack').mkdir(parents=True)
         self.assert_root(self.install(self.home / '.codex/skills/gstack'))
 
-    def test_nonexecutable_native_helper_falls_back(self):
-        self.install(self.home / '.codex/skills/gstack', executable=False)
-        self.assert_root(self.install(self.home / '.claude/skills/gstack'))
+    def test_missing_install_names_one_fix_and_no_upgrade_prompt(self):
+        result = self.run_bootstrap()
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('SKILL_START_PROTO: 1', result.stdout)
+        self.assertEqual(len(result.stderr.splitlines()), 1, result.stderr)
+        self.assertIn('./setup --host codex', result.stderr)
+        self.assertNotIn('/gstack-upgrade', result.stdout + result.stderr)
 
-    def test_native_helper_directory_falls_back(self):
-        (self.home / '.codex/skills/gstack/bin/gstack-skill-start').mkdir(parents=True)
-        self.assert_root(self.install(self.home / '.claude/skills/gstack'))
-
-    def test_shared_helper_directory_is_skipped(self):
-        (self.home / '.agents/skills/gstack/bin/gstack-skill-start').mkdir(parents=True)
-        self.assert_root(self.install(self.home / '.claude/skills/gstack'))
-
-    def test_only_helper_directory_degrades_without_shell_error(self):
-        (self.repo / '.agents/skills/gstack/bin/gstack-skill-start').mkdir(parents=True)
-        self.assertTrue(self.run_bootstrap().startswith('SKILL_START: unavailable\n'))
-
-    def test_missing_helper_degrades_without_shell_error_or_upgrade_prompt(self):
-        output = self.run_bootstrap()
-        self.assertTrue(output.startswith('SKILL_START: unavailable\n'), output)
-        self.assertNotIn('SKILL_START_PROTO: 1', output)
-        self.assertNotIn('/gstack-upgrade', output)
-
-    def test_failed_helper_keeps_degraded_status(self):
-        self.install(self.home / '.codex/skills/gstack', succeeds=False)
-        self.assertTrue(self.run_bootstrap().startswith('SKILL_START: unavailable\n'))
+    def test_degraded_mode_prose_asks_for_no_upgrade(self):
+        degraded = CONTENT.split('**Degraded mode:**', 1)[1].split('\n\n', 1)[0]
+        self.assertNotIn('/gstack-upgrade', degraded)
+        self.assertIn('Mention missing startup only if it blocks a required operation', degraded)
 
     def test_codex_catalog_uses_compact_description(self):
         frontmatter = CONTENT.split('---', 2)[1]
