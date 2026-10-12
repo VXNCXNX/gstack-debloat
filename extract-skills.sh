@@ -15,13 +15,17 @@
 #   --from DIR   gstack checkout to read. Never modified: the build runs on a
 #                temp copy, stripped by ./strip-telemetry.sh with HOME pointed
 #                at a temp dir, then re-rendered with standalone replacements.
-#   --out DIR    where <skill>/ folders land. An existing <out>/<skill> is
-#                replaced whole (built beside it, then swapped), so a rerun
-#                converges to the same tree.
+#   --out DIR    where <skill>/ folders land. Every skill is built beside its
+#                old folder and checked first; only when all of them pass are
+#                the old folders replaced, so a failed refresh changes nothing
+#                and a rerun converges to the same tree.
+#   --root DIR   where the skills will live at run time, written into the
+#                paths they use to reach their own helpers. Defaults to
+#                ~/.claude/skills; use ~/.codex/skills, or the same as --out,
+#                for other hosts. --out can differ (a staging dir you copy from).
 #   --check DIR  scan DIR for gstack-install references, telemetry/learnings
 #                writes, update-check and plan-report gates. Prints file:line
-#                and exits 1 when any remain, 0 when clean. The extract runs
-#                the same scan on what it built and exits with its result.
+#                and exits 1 when any remain, 0 when clean.
 #
 # Requires: bash 3.2+, python3, bun (to render gstack's templates), tar.
 # ============================================================================
@@ -33,7 +37,7 @@ STRIP="$SCRIPT_DIR/strip-telemetry.sh"
 usage() { awk 'NR<3{next} /^# ={5,}/{exit} {sub(/^# ?/,""); print}' "$0"; }
 die() { echo "extract-skills: $*" >&2; exit 2; }
 
-MODE=extract FROM="" OUT="" CHECK_DIR="" SKILLS=""
+MODE=extract FROM="" OUT="" ROOT="$HOME/.claude/skills" CHECK_DIR="" SKILLS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
@@ -41,6 +45,8 @@ while [ $# -gt 0 ]; do
     --from=*)  FROM="${1#--from=}" ;;
     --out)     OUT="${2:?--out needs a directory}"; shift ;;
     --out=*)   OUT="${1#--out=}" ;;
+    --root)    ROOT="${2:?--root needs a directory}"; shift ;;
+    --root=*)  ROOT="${1#--root=}" ;;
     --check)   MODE=check; CHECK_DIR="${2:?--check needs a directory}"; shift ;;
     --check=*) MODE=check; CHECK_DIR="${1#--check=}" ;;
     --*)       die "unknown flag '$1' (try --help)" ;;
@@ -116,6 +122,16 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v bun >/dev/null 2>&1 || die "bun is required to render gstack's templates"
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
+case "$ROOT" in /*) ;; *) die "--root must be an absolute path: $ROOT" ;; esac
+ROOT="${ROOT%/}"
+# The skills reach their own helpers through ROOT: written as $HOME/... in shell
+# blocks and ~/... in prose when it sits under the home dir, else absolute.
+case "$ROOT/" in
+  "$HOME"/*) EXTRACT_ROOT_SH="\$HOME/${ROOT#"$HOME"/}"; EXTRACT_ROOT_DOC="~/${ROOT#"$HOME"/}" ;;
+  *)         EXTRACT_ROOT_SH="$ROOT"; EXTRACT_ROOT_DOC="$ROOT" ;;
+esac
+export EXTRACT_ROOT_SH EXTRACT_ROOT_DOC
+[ "$OUT" = "$ROOT" ] || echo "extract-skills: paths point at $ROOT; copy the folders there from $OUT"
 
 _tmpdir=${TMPDIR:-/tmp}
 WORK=$(mktemp -d "${_tmpdir%/}/gstack-extract.XXXXXX")
@@ -136,6 +152,10 @@ fi
 PY="$WORK/transform.py"
 cat > "$PY" <<'PYEOF'
 import json, os, re, shutil, sys
+
+# Where the skills live at run time (--root), as a shell path and as prose.
+ROOT_SH = os.environ.get('EXTRACT_ROOT_SH', '$HOME/.claude/skills')
+ROOT_DOC = os.environ.get('EXTRACT_ROOT_DOC', '~/.claude/skills')
 
 # ── Standalone replacements, keyed by gstack template placeholder ───────────
 # A placeholder is gstack's own unit of shared content, so replacing it in the
@@ -250,10 +270,10 @@ SECTIONS = {
 # Each pattern is anchored on upstream wording; when upstream rewords one, the
 # check reports the leftover line and this table gets a new row.
 RENDER_STEP = """Open the sketch in gstack's headless browse binary and screenshot it. Standalone, the
-binary lives at `~/.claude/skills/@SKILL@/bin/browse` (or set `BROWSE_BIN`):
+binary lives at `@ROOT_DOC@/@SKILL@/bin/browse` (or set `BROWSE_BIN`):
 
 ```bash
-B="${BROWSE_BIN:-$HOME/.claude/skills/@SKILL@/bin/browse}"
+B="${BROWSE_BIN:-@ROOT_SH@/@SKILL@/bin/browse}"
 if [ -x "$B" ]; then
   "$B" goto "file://<sketch-dir>/sketch.html" && "$B" screenshot <sketch-dir>/sketch.png
 else
@@ -374,7 +394,7 @@ def line_rules(ctx):
          lambda m: '${%s:-%s}' % (m.group(1), PATH_VALUES[m.group(1)])),
         # a sibling skill that is extracted too lives next to this one
         (re.compile(r'(~|\$HOME|\$\{HOME\})/\.claude/skills/gstack/(' + skills + r')/'),
-         lambda m: f'{m.group(1)}/.claude/skills/{m.group(2)}/'),
+         lambda m: f'{ROOT_DOC if m.group(1) == "~" else ROOT_SH}/{m.group(2)}/'),
         # gstack-named knobs become skill-named ones
         (re.compile(r'\bGSTACK_CODEX_MODEL\b'), lambda m: 'CODEX_SKILL_MODEL'),
         (re.compile(r'\bGSTACK_CODEX_EFFORT\b'), lambda m: 'CODEX_SKILL_EFFORT'),
@@ -463,14 +483,18 @@ def vendor_assets(src, dest, skill, texts, report):
             os.makedirs(os.path.join(dest, 'bin'), exist_ok=True)
             shutil.copy2(p, os.path.join(dest, target))
         else:
-            report.append(f'{skill}: {built} is not built in --from; put the binary at ~/.claude/skills/{skill}/{target}')
+            report.append(f'{skill}: {built} is not built in --from; put the binary at {ROOT_DOC}/{skill}/{target}')
         vendored[built] = target
     return vendored
 
 def rewrite_asset_paths(text, skill, vendored):
     def sub(m):
         rel = m.group(1)
-        return m.group(0).replace(f'.claude/skills/gstack/{rel}', f'.claude/skills/{skill}/{vendored[rel]}') if rel in vendored else m.group(0)
+        if rel not in vendored:
+            return m.group(0)
+        prefix = m.group(0)[:m.group(0).index('/.claude/skills/gstack/')]
+        quote = '"' if prefix.startswith('"') else ''
+        return f'{quote}{ROOT_DOC if prefix == "~" else ROOT_SH}/{skill}/{vendored[rel]}'
     text = ASSET_REF.sub(sub, text)
     for built, target in BINARIES.items():
         if built in vendored:
@@ -478,8 +502,8 @@ def rewrite_asset_paths(text, skill, vendored):
             text = re.sub(r'(?m)^_ROOT=\$\(git rev-parse --show-toplevel 2>/dev/null\)\n(?:D|B)=""\n(?:\[ -n "\$_ROOT" \][^\n]*' + re.escape(built) + r'[^\n]*\n)?',
                           '', text)
             text = re.sub(r'(?m)^\[ -z "\$(D|B)" \] && \1="[^"\n]*' + re.escape(built) + r'"$',
-                          lambda m: f'{m.group(1)}="$HOME/.claude/skills/{skill}/{target}"', text)
-            text = re.sub(r'(?:~|\$HOME|\$_ROOT)/\.claude/skills/gstack/' + re.escape(built), f'$HOME/.claude/skills/{skill}/{target}', text)
+                          lambda m: f'{m.group(1)}="{ROOT_SH}/{skill}/{target}"', text)
+            text = re.sub(r'(?:~|\$HOME|\$_ROOT)/\.claude/skills/gstack/' + re.escape(built), f'{ROOT_SH}/{skill}/{target}', text)
     return text
 
 # ── Markdown structure ──────────────────────────────────────────────────────
@@ -646,7 +670,7 @@ def build(src, skill, dest, skills):
         text = replace_sections(text, SECTIONS, ctx['codex_model'])
         text = apply_line_rules(text, rules)
         for pattern, repl in TEXT_EDITS:
-            text = re.sub(pattern, lambda m: repl.replace('@SKILL@', skill), text, flags=re.S)
+            text = re.sub(pattern, lambda m: repl.replace('@SKILL@', skill).replace('@ROOT_SH@', ROOT_SH).replace('@ROOT_DOC@', ROOT_DOC), text, flags=re.S)
         texts[rel] = drop_empty_fences(text)
     vendored = vendor_assets(src, dest, skill, texts, report)
     for rel, text in texts.items():
@@ -675,13 +699,26 @@ HOME="$WORK/home" "$STRIP" "$SRC" > "$WORK/strip.log" 2>&1 || {
 
 _rm() { if command -v trash >/dev/null 2>&1; then trash "$1" 2>/dev/null || rm -rf "$1"; else rm -rf "$1"; fi; }
 
+# Build every skill beside its old folder and check the staged trees first: a
+# refresh that fails the check leaves every installed skill untouched.
 for _s in $SKILLS; do
   # A crash between the two renames below leaves these; the next run clears them.
   for _stale in "$OUT/.$_s".new.* "$OUT/.$_s".old.*; do [ -e "$_stale" ] && rm -rf "$_stale"; done
-  _new="$OUT/.$_s.new.$$"
-  mkdir "$_new"
+  mkdir "$OUT/.$_s.new.$$"
   # shellcheck disable=SC2086
-  python3 "$PY" build "$SRC" "$_s" "$_new" $SKILLS
+  python3 "$PY" build "$SRC" "$_s" "$OUT/.$_s.new.$$" $SKILLS
+done
+
+_rc=0
+for _s in $SKILLS; do check_dir "$OUT/.$_s.new.$$" || _rc=1; done
+if [ "$_rc" != 0 ]; then
+  for _s in $SKILLS; do rm -rf "$OUT/.$_s.new.$$"; done
+  echo "extract-skills: check failed; nothing replaced under $OUT" >&2
+  exit 1
+fi
+
+for _s in $SKILLS; do
+  _new="$OUT/.$_s.new.$$"
   if [ -e "$OUT/$_s" ]; then
     mv "$OUT/$_s" "$OUT/.$_s.old.$$"
     mv "$_new" "$OUT/$_s"
@@ -691,7 +728,3 @@ for _s in $SKILLS; do
   fi
   echo "extract-skills: wrote $OUT/$_s"
 done
-
-_rc=0
-for _s in $SKILLS; do check_dir "$OUT/$_s" || _rc=1; done
-exit $_rc

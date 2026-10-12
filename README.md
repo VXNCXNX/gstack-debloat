@@ -238,9 +238,11 @@ git clone https://github.com/garrytan/gstack.git /tmp/gstack && (cd /tmp/gstack 
 ./extract-skills.sh --check ~/.claude/skills/codex   # exit 0 when clean, file:line hits otherwise
 ```
 
-Rerun it against a newer checkout to refresh. Each `<out>/<skill>` is rebuilt beside
-the old one and swapped in, so a rerun converges to the same tree. Requires bash 3.2+,
-python3, bun and tar.
+Rerun it against a newer checkout to refresh. Every skill is rebuilt beside the old one
+and checked first; the old folders are replaced only when all of them pass, so a failed
+refresh changes nothing. The skills reach their own helpers under `--root` (default
+`~/.claude/skills`): pass `--root ~/.codex/skills` for Codex, and keep `--out` free to
+be a staging dir you copy from. Requires bash 3.2+, python3, bun and tar.
 
 ### Preview & verify
 
