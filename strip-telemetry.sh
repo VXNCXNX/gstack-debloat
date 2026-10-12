@@ -1373,6 +1373,12 @@ if test_file.exists():
         "      expect(content).not.toContain('Prior Learnings');\n      expect(content).not.toContain('gstack-learnings-search');\n",
     )
     c = c.replace("      expect(content).toContain('Capture Learnings');\n", "      expect(content).not.toContain('Capture Learnings');\n")
+    # Phase 1e deletes the Founder Resources section, which this #2801 test used as
+    # the end of the tier-path range: read the tier paths to the end of the file.
+    c = c.replace(
+        "between(handoff, '### Step 2: Follow the Tier Path', '## Founder Resources')",
+        "between(handoff, '### Step 2: Follow the Tier Path')",
+    )
     c = c.replace(
         "expect(content).not.toContain('~/.codex/skills/gstack/bin/gstack-config get telemetry');",
         "// Telemetry removed\n    expect(content).not.toContain('telemetry');",
