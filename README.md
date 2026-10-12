@@ -12,7 +12,9 @@ cross-run timing log, and the learnings resolver exports helpers that other
 resolvers import, so the old stub broke `gen:skill-docs`. The strip patches all
 of these at the source, and `--check` stays clean after `gen:skill-docs --host all`.
 It also drops the once-per-machine outside-review notice. [v1.91 changes](#v191-changes)
-lists each upstream addition and whether the strip removes or keeps it.
+lists each upstream addition and whether the strip removes or keeps it. New in v1.2.0:
+`extract-skills.sh` builds a few gstack skills as standalone folders, so you can
+[keep the skills you use without installing gstack](#keep-a-few-skills-without-gstack).
 v1.1.1 line-anchored the learnings verification markers. v1.1.0 added optional
 skill pruning, support for newer gstack runtime scripts, and quieter Codex
 startup with compact skill descriptions.
@@ -219,6 +221,26 @@ Use `--keep "browse,qa,review,investigate"` for a custom set, or
 `--minimal`; the gstack core and command shim are always retained. Pruning removes
 other skills from the install copies, so rerun with the same options after gstack
 upgrades or regeneration.
+
+### Keep a few skills without gstack
+
+`extract-skills.sh` turns a gstack checkout into one standalone folder per skill,
+with no gstack install behind it. The folders carry no `~/.claude/skills/gstack`
+paths, no gstack `bin/` helpers, no telemetry or learnings writes, no update-check,
+and no plan-file review report or exit-plan-mode gate. The project slug is computed
+inline from `git remote get-url origin`, and `gstack-config` reads become their
+defaults. Your checkout is never modified: the build runs on a temp copy that this
+repo's strip cleans first.
+
+```bash
+git clone https://github.com/garrytan/gstack.git /tmp/gstack && (cd /tmp/gstack && bun install)
+./extract-skills.sh --from /tmp/gstack --out ~/.claude/skills codex,office-hours,plan-design-review,investigate
+./extract-skills.sh --check ~/.claude/skills/codex   # exit 0 when clean, file:line hits otherwise
+```
+
+Rerun it against a newer checkout to refresh. Each `<out>/<skill>` is rebuilt beside
+the old one and swapped in, so a rerun converges to the same tree. Requires bash 3.2+,
+python3, bun and tar.
 
 ### Preview & verify
 
