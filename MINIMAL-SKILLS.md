@@ -15,6 +15,9 @@ mechanism.
 
 ## Catalog: 54 skills
 
+As of gstack v1.91.93 the catalog has 58 skills (`--list-skills`). Every name in
+the default keep set below still exists, and `--minimal` prunes the other 37.
+
 ### KEEP — core working set (20, your session-start active set)
 browse, qa, review, investigate, retro, canary, benchmark, codex, cso, spec,
 office-hours, autoplan, plan-ceo-review, plan-eng-review, plan-design-review,
