@@ -1172,6 +1172,13 @@ def _strip_learnings_logging(c):
     )
 patch(GSTACK_DIR / 'scripts/resolvers/plan-gates.ts', _strip_learnings_logging)
 
+# v1.94.36 confidence.ts: the "Calibration learning" sentence now says "log it
+# per Operational Self-Improvement", a section Phase 1b removes, so it would
+# point at nothing. Drop the sentence (older wording "log the corrected pattern
+# as a learning" too: learnings are stripped either way).
+patch(GSTACK_DIR / 'scripts/resolvers/confidence.ts', lambda c: re.sub(
+    r'\n\n\*\*Calibration learning:\*\*[^`]*?(?=`;)', '', c))
+
 # v1.91 moved the spec-review loop out of review.ts into spec-review.ts and
 # writes its metrics under $GSTACK_STATE_ROOT/analytics/ (no `~/.gstack` in the
 # path, so the older review.ts patches never see it). Drop the append and the
@@ -2093,6 +2100,10 @@ _HEADING_REMAINING=$(grep -RInE \
   ${_SOURCES} \
   2>/dev/null || true)
 REMAINING="$REMAINING$_HEADING_REMAINING"
+# Shell comments in bin/ scripts are not calls: v1.94 gstack-skill-start names
+# gstack-skill-end in a comment about its workflow lease (GST-1205). Markdown
+# keeps its lines, since a `#` there starts a heading the check must catch.
+REMAINING=$(printf '%s\n' "$REMAINING" | grep -vE '/bin/[^/:]+:[0-9]+:[[:space:]]*#' || true)
 
 _AGENTS_DIR="$GSTACK_DIR/.agents/skills/gstack"
 if [ -d "$_AGENTS_DIR" ]; then
