@@ -217,7 +217,10 @@ detect_noise() {
   # v1.91 additions: state-root analytics appends ($GSTACK_STATE_ROOT/analytics,
   # no `~/.gstack` for the render marker to catch), the outside-review notice
   # marker file, and /autoplan's cross-run timing append.
-  [ -n "$_srcs" ] && grep -IlE \
+  # -Hn, not -l: shell comments in bin/ scripts are not calls (v1.94
+  # gstack-skill-start names gstack-skill-end in a comment about its workflow
+  # lease, GST-1205), so drop those lines before reducing to file names.
+  [ -n "$_srcs" ] && grep -IHnE \
       -e '_TEL=\$\(.*get telemetry' \
       -e '_UPD=\$\(.*gstack-update-check' \
       -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics|skill-end)' \
@@ -232,7 +235,8 @@ detect_noise() {
       -e 'show-first-use-notice$' \
       -e 'codex-review-notice-shown' \
       -e 'appendFileSync\(target' \
-      ${_srcs} 2>/dev/null || true
+      ${_srcs} 2>/dev/null \
+    | grep -vE '/bin/[^/:]+:[0-9]+:[[:space:]]*#' | cut -d: -f1 | LC_ALL=C sort -u || true
 }
 
 if [ "$MODE" = "check" ]; then
@@ -1172,6 +1176,13 @@ def _strip_learnings_logging(c):
     )
 patch(GSTACK_DIR / 'scripts/resolvers/plan-gates.ts', _strip_learnings_logging)
 
+# v1.94.36 confidence.ts: the "Calibration learning" sentence now says "log it
+# per Operational Self-Improvement", a section Phase 1b removes, so it would
+# point at nothing. Drop the sentence (older wording "log the corrected pattern
+# as a learning" too: learnings are stripped either way).
+patch(GSTACK_DIR / 'scripts/resolvers/confidence.ts', lambda c: re.sub(
+    r'\n\n\*\*Calibration learning:\*\*[^`]*?(?=`;)', '', c))
+
 # v1.91 moved the spec-review loop out of review.ts into spec-review.ts and
 # writes its metrics under $GSTACK_STATE_ROOT/analytics/ (no `~/.gstack` in the
 # path, so the older review.ts patches never see it). Drop the append and the
@@ -1349,10 +1360,11 @@ if test_file.exists():
             'multiline descriptions preserved in Codex output',
             'Codex descriptions are compact with routing preserved in the body',
         )
+        # v1.94 writes one-line Codex descriptions itself and renders no
+        # '## When to invoke' body section, so only the one-line shape is pinned.
         block = block.replace(
             'expect(descLines.length).toBeGreaterThan(1);',
-            "expect(descLines.length).toBe(0);\n"
-            "    expect(content).toContain('## When to invoke');",
+            "expect(descLines.length).toBe(0);",
         )
         block = block.replace('// Description should span multiple lines (block scalar)',
                               '// Catalog descriptions occupy one line.')
@@ -1399,6 +1411,16 @@ if test_file.exists():
     )
     c = re.sub(
         r"  test\('telemetry producer lives in the scripts.*?\n  \}\);\n\n",
+        '', c, flags=re.DOTALL,
+    )
+    # v1.94: the "Calibration learning" sentence Phase 1f drops (it points at
+    # Operational Self-Improvement), and the learnings "operational" type.
+    c = re.sub(
+        r"  test\('confidence calibration includes calibration learning feedback loop'.*?\n  \}\);\n\n",
+        '', c, flags=re.DOTALL,
+    )
+    c = re.sub(
+        r"  test\('generated SKILL\.md with LEARNINGS_LOG contains operational type'.*?\n  \}\);\n\n",
         '', c, flags=re.DOTALL,
     )
     # /spec's review loop no longer writes spec-review.jsonl.
@@ -1461,6 +1483,9 @@ if ss_test.exists():
         # gstack-skill-end is a stub: its three tests assert the epilogue's
         # duration maths, queue drain and pending-marker cleanup.
         c = re.sub(r"\ndescribe\('gstack-skill-end'.*?\n\}\);\n", '\n', c, flags=re.DOTALL)
+        # v1.94 lifecycle --help covers both binaries; the stub prints no usage.
+        c = c.replace("[['gstack-skill-start', START], ['gstack-skill-end', END]]",
+                      "[['gstack-skill-start', START]]")
         # OV4 sanitizer: the test poisoned the update-check passthrough, which
         # no longer runs. The sanitizer itself is intact and still guards the
         # FIRST_TASK passthrough -- poison that instead, so the test keeps
@@ -2093,6 +2118,10 @@ _HEADING_REMAINING=$(grep -RInE \
   ${_SOURCES} \
   2>/dev/null || true)
 REMAINING="$REMAINING$_HEADING_REMAINING"
+# Shell comments in bin/ scripts are not calls: v1.94 gstack-skill-start names
+# gstack-skill-end in a comment about its workflow lease (GST-1205). Markdown
+# keeps its lines, since a `#` there starts a heading the check must catch.
+REMAINING=$(printf '%s\n' "$REMAINING" | grep -vE '/bin/[^/:]+:[0-9]+:[[:space:]]*#' || true)
 
 _AGENTS_DIR="$GSTACK_DIR/.agents/skills/gstack"
 if [ -d "$_AGENTS_DIR" ]; then
