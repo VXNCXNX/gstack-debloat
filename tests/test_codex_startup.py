@@ -19,7 +19,8 @@ import unittest
 
 
 GSTACK = Path(sys.argv.pop(1)).resolve()
-CONTENT = (GSTACK / '.agents/skills/gstack-investigate/SKILL.md').read_text()
+# office-hours, not investigate: upstream retired /investigate (gstack ef99eb5a5).
+CONTENT = (GSTACK / '.agents/skills/gstack-office-hours/SKILL.md').read_text()
 BOOTSTRAP = re.search(r'## Preamble \(run first\)\s+```bash\n(.*?)\n```', CONTENT, re.S).group(1)
 
 
@@ -122,8 +123,7 @@ class CodexStartupTests(unittest.TestCase):
         description = re.search(r'^description: (.+)$', frontmatter, re.M)
         self.assertIsNotNone(description, 'Codex still has a multiline routing description')
         self.assertLess(len(description.group(1)), 180)
-        self.assertIn('Systematic debugging', description.group(1))
-        self.assertIn('## When to invoke', CONTENT)
+        self.assertIn('Office Hours', description.group(1))
 
 
 if __name__ == '__main__':

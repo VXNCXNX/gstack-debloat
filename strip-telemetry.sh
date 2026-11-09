@@ -217,7 +217,10 @@ detect_noise() {
   # v1.91 additions: state-root analytics appends ($GSTACK_STATE_ROOT/analytics,
   # no `~/.gstack` for the render marker to catch), the outside-review notice
   # marker file, and /autoplan's cross-run timing append.
-  [ -n "$_srcs" ] && grep -IlE \
+  # -Hn, not -l: shell comments in bin/ scripts are not calls (v1.94
+  # gstack-skill-start names gstack-skill-end in a comment about its workflow
+  # lease, GST-1205), so drop those lines before reducing to file names.
+  [ -n "$_srcs" ] && grep -IHnE \
       -e '_TEL=\$\(.*get telemetry' \
       -e '_UPD=\$\(.*gstack-update-check' \
       -e 'gstack-(telemetry-(log|sync)|timeline-(log|read)|learnings-(log|search)|analytics|skill-end)' \
@@ -232,7 +235,8 @@ detect_noise() {
       -e 'show-first-use-notice$' \
       -e 'codex-review-notice-shown' \
       -e 'appendFileSync\(target' \
-      ${_srcs} 2>/dev/null || true
+      ${_srcs} 2>/dev/null \
+    | grep -vE '/bin/[^/:]+:[0-9]+:[[:space:]]*#' | cut -d: -f1 | LC_ALL=C sort -u || true
 }
 
 if [ "$MODE" = "check" ]; then
