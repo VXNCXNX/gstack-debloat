@@ -1360,10 +1360,11 @@ if test_file.exists():
             'multiline descriptions preserved in Codex output',
             'Codex descriptions are compact with routing preserved in the body',
         )
+        # v1.94 writes one-line Codex descriptions itself and renders no
+        # '## When to invoke' body section, so only the one-line shape is pinned.
         block = block.replace(
             'expect(descLines.length).toBeGreaterThan(1);',
-            "expect(descLines.length).toBe(0);\n"
-            "    expect(content).toContain('## When to invoke');",
+            "expect(descLines.length).toBe(0);",
         )
         block = block.replace('// Description should span multiple lines (block scalar)',
                               '// Catalog descriptions occupy one line.')
@@ -1410,6 +1411,16 @@ if test_file.exists():
     )
     c = re.sub(
         r"  test\('telemetry producer lives in the scripts.*?\n  \}\);\n\n",
+        '', c, flags=re.DOTALL,
+    )
+    # v1.94: the "Calibration learning" sentence Phase 1f drops (it points at
+    # Operational Self-Improvement), and the learnings "operational" type.
+    c = re.sub(
+        r"  test\('confidence calibration includes calibration learning feedback loop'.*?\n  \}\);\n\n",
+        '', c, flags=re.DOTALL,
+    )
+    c = re.sub(
+        r"  test\('generated SKILL\.md with LEARNINGS_LOG contains operational type'.*?\n  \}\);\n\n",
         '', c, flags=re.DOTALL,
     )
     # /spec's review loop no longer writes spec-review.jsonl.
@@ -1472,6 +1483,9 @@ if ss_test.exists():
         # gstack-skill-end is a stub: its three tests assert the epilogue's
         # duration maths, queue drain and pending-marker cleanup.
         c = re.sub(r"\ndescribe\('gstack-skill-end'.*?\n\}\);\n", '\n', c, flags=re.DOTALL)
+        # v1.94 lifecycle --help covers both binaries; the stub prints no usage.
+        c = c.replace("[['gstack-skill-start', START], ['gstack-skill-end', END]]",
+                      "[['gstack-skill-start', START]]")
         # OV4 sanitizer: the test poisoned the update-check passthrough, which
         # no longer runs. The sanitizer itself is intact and still guards the
         # FIRST_TASK passthrough -- poison that instead, so the test keeps
